@@ -31,15 +31,15 @@
  * This code was written under funding by Ericsson Radio Systems.
  */
 
-#ifndef __DH_H__
-#define __DH_H__
+#ifndef _DH_H_
+#define _DH_H_
 
 #include <sys/types.h>
 
 struct group;
 
-int dh_getlen(struct group *);
-int dh_create_exchange(struct group *, unsigned char *);
-int dh_create_shared(struct group *, unsigned char *, unsigned char *);
+int dh_getlen (struct group *);
+int dh_create_exchange (struct group *, unsigned char *);
+int dh_create_shared (struct group *, unsigned char *, unsigned char *);
 
-#endif
+#endif /* _DH_H_ */
