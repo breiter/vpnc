@@ -24,10 +24,7 @@ fi
 echo "Terminating vpnc daemon (pid: $PID)"
 kill $PID
 
-# this still sucks. Invent something to sync route removal/addition with
-# vpnc-connect
-
-if [ -s "$defr" ]; then
+if [ -r "$defr" ]; then
 	ip route del default > /dev/null 2>&1
 	ip route add $(cat "$defr")
 	test -r "$gateway" && ip route del $(cat "$gateway")
