@@ -1,22 +1,25 @@
 #!/bin/sh
 
+getvar () {
+	if [ $# -ne 2 ]; then
+		echo "Usage: $0 <parameter file> <variable name>" 1>&2
+		return 1
+	fi
+	sed -n 's/^'"$2"' //p' "$1"
+	return 0
+}
+
 defr=/var/run/vpnc/defaultroute
-gateway=/var/run/vpnc/gateway
 pid=/var/run/vpnc/pid
 
-if [ $# -ne 0 ]; then
-	echo "Usage: $0" 1>&2
+if [ $# -ne 1 ]; then
+	echo "Usage: $0 <parameter file>" 1>&2
 	exit 1
 fi
 
-PID="$(cat "$pid" 2> /dev/null)"
+PID="$(cat $pid)"
 
 if [ -z "$PID" ]; then
-	echo "no vpnc found running"
-	exit 1
-fi
-
-if ! kill -0 "$PID" > /dev/null 2>&1; then
 	echo "no vpnc found running"
 	exit 1
 fi
@@ -24,16 +27,11 @@ fi
 echo "Terminating vpnc daemon (pid: $PID)"
 kill $PID
 
-# this still sucks. Invent something to sync route removal/addition with
-# vpnc-connect
-
-if [ -s "$defr" ]; then
+if [ -r "$defr" ]; then
 	ip route del default > /dev/null 2>&1
 	ip route add $(cat "$defr")
-	test -r "$gateway" && ip route del $(cat "$gateway")
+	ip route del $(getvar "$1" "IPSec gateway")
 	ip route flush cache
 fi
-
-rm -f -- "$defr" "$pid" "$gateway"
 
 exit 0
