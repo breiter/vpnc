@@ -1,7 +1,6 @@
 #ifndef __SYSDEP_H__
 #define __SYSDEP_H__
 
-#include <sys/types.h>
 #include <netinet/in.h>
 
 int tun_open(char *dev);
@@ -15,7 +14,7 @@ const char *sysdep_config_script(void);
 #include <error.h>
 #else
 extern void error(int fd, int errorno, const char *fmt, ...);
-extern int getline(char **line, size_t * length, FILE * stream);
+extern int getline(char **line, size_t *length, FILE *stream);
 #endif
 
 #if defined(__sun__)
