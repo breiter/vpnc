@@ -20,6 +20,8 @@ TODO list
 
 * DONE NetBSD supported
 
+--
+
 * DONE FreeBSD supported
 
 * DONE ignore attr 32136! (Cisco extension: XAUTH Vendor)
@@ -48,6 +50,8 @@ TODO list
 
 * DONE accept (== ignore) lifetime update in phase1
 
+****
+
 * DONE send lifetime in phase1 and phase2
 
 * DONE send version string
@@ -60,63 +64,19 @@ TODO list
 
 * DONE check /dev/net/tun, reject /dev/tun* on linux
 
-***
+* optional drop root
 
-* DONE XAUTH Domain: (empty)
+* implement rekeying
 
-* DONE svn-Repository
+* frozen connections?
 
-* DONE implement udp encap via port 10.000
-  - apply patch
+* implement udp transport
 
-* DONE fix Makefile (install, DESTDIR, CFLAGS, ...)
+****
 
-* DONE implement udp transport NAT-T
-  - apply patch
+* check config-file mode??
 
-* links to packages, howtos, etc.
-  - http://localhost.ruhr.de/~stefan/uni-duisburg.ai/vpnc.html
-  - link to kvpnc?
+* retry login??
 
-* add macosx support
-  - add pointer to http://chrisp.de/en/projects/tunnel.html
-
-* factor out crypto stuff (cipher, hmac, dh)
-  - http://libtomcrypt.org/features.html
-  - http://www.foldr.org/~michaelw/ patch fertig
-  - libgcrypt (old too?)
-  - autodetect?
-  - openssl??
-* relicense to gpl+ssl?
-
-* --local-address
-
-* clean up scripts
-
-* update "check pfs setting" error message
-
-* better handling of routing
-
-* better handling of resolv.conf?
-
-* use in-kernel-ipsec with pf-key
-  - apply patch
-
-* make doing xauth optional
-
-* add support for pcap for packet capture
-
---
-
-* implement compression
-
-* implement rekeying / DPD / frozen connections?
-
-* implement certificate support
-
-* implement hybrid-auth
-
-* optional drop root (rekey? reconnect?)
-
-* nortel support?
+* getopt()? libpopt?
 

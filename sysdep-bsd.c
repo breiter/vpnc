@@ -16,6 +16,10 @@
     GNU General Public License for more details.
  */
 
+/*
+ * $Id: tun_dev.c,v 1.1.2.2 2000/11/20 08:15:53 maxk Exp $
+ */ 
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -35,43 +39,42 @@
 /* 
  * Allocate TUN device, returns opened fd. 
  * Stores dev name in the first arg(must be large enough).
- */
+ */  
 int tun_open(char *dev)
 {
-	char tunname[14];
-	int i, fd;
+    char tunname[14];
+    int i, fd;
 
-	if (*dev) {
-		if (strncmp(dev, "tun", 3))
-			error(1, 0,
-				"error: arbitrary naming tunnel interface only supported on linux\n");
-		sprintf(tunname, "/dev/%s", dev);
-		return open(tunname, O_RDWR);
-	}
+    if( *dev ) {
+       if (strncmp(dev, "tun", 3))
+         error(1, 0, "error: arbitrary naming tunnel interface only supported on linux\n");
+       sprintf(tunname, "/dev/%s", dev);
+       return open(tunname, O_RDWR);
+    }
 
-	for (i = 0; i < 255; i++) {
-		sprintf(tunname, "/dev/tun%d", i);
-		/* Open device */
-		if ((fd = open(tunname, O_RDWR)) > 0) {
-			sprintf(dev, "tun%d", i);
-			return fd;
-		}
-	}
-	return -1;
+    for(i=0; i < 255; i++){
+       sprintf(tunname, "/dev/tun%d", i);
+       /* Open device */
+       if( (fd=open(tunname, O_RDWR)) > 0 ){
+          sprintf(dev, "tun%d", i);
+          return fd;
+       }
+    }
+    return -1;
 }
 
 int tun_close(int fd, char *dev)
 {
-	dev = NULL; /*unused */
-	return close(fd);
+    dev = NULL; /*unused*/
+    return close(fd);
 }
 
 #ifdef NEW_TUN
 #define MAX_MRU 2048
 struct tun_data {
 	union {
-		uint32_t family;
-		uint32_t timeout;
+		u_int32_t family;
+		u_int32_t timeout;
 	} header;
 	u_char data[MAX_MRU];
 };
@@ -79,52 +82,52 @@ struct tun_data {
 /* Read/write frames from TUN device */
 int tun_write(int fd, char *buf, int len)
 {
-	char *data;
-	struct tun_data tun;
-
-	if (len > (int)sizeof(tun.data))
-		return -1;
-
-	memcpy(tun.data, buf, len);
-	tun.header.family = htonl(AF_INET);
-	len += (sizeof(tun) - sizeof(tun.data));
-	data = (char *)&tun;
-
-	return write(fd, data, len) - (sizeof(tun) - sizeof(tun.data));
+    char *data;
+    struct tun_data tun;
+    
+    if (len > (int)sizeof(tun.data))
+	return -1;
+    
+    memcpy(tun.data, buf, len);
+    tun.header.family = htonl(AF_INET);
+    len += (sizeof(tun) - sizeof(tun.data));
+    data = (char *)&tun;
+    
+    return write(fd, data, len) - (sizeof(tun) - sizeof(tun.data));
 }
 
 int tun_read(int fd, char *buf, int len)
 {
-	struct tun_data tun;
-	char *data;
-	size_t sz;
-	int pack;
-
-	data = (char *)&tun;
-	sz = sizeof(tun);
-	pack = read(fd, data, sz);
-	if (pack == -1)
-		return -1;
-
-	pack -= sz - sizeof(tun.data);
-	if (pack > len)
-		pack = len; /* truncate paket */
-
-	memcpy(buf, tun.data, pack);
-
-	return pack;
+    struct tun_data tun;
+    char *data;
+    size_t sz;
+    int pack;
+    
+    data = (char *)&tun;
+    sz = sizeof(tun);
+    pack = read(fd, data, sz);
+    if (pack == -1)
+	    return -1;
+    
+    pack -= sz - sizeof(tun.data);
+    if (pack > len)
+	    pack = len; /* truncate paket */
+    
+    memcpy(buf, tun.data, pack);
+    
+    return pack;
 }
 
 #else
 
 int tun_write(int fd, char *buf, int len)
 {
-	return write(fd, buf, len);
+    return write(fd, buf, len);
 }
 
 int tun_read(int fd, char *buf, int len)
 {
-	return read(fd, buf, len);
+    return read(fd, buf, len);
 }
 #endif
 
@@ -138,8 +141,8 @@ const char *sysdep_config_script(void)
 
 void error(int status, int errornum, const char *fmt, ...)
 {
-	char *buf2;
-	va_list ap;
+	char   *buf2;
+	va_list        ap;
 
 	va_start(ap, fmt);
 	vasprintf(&buf2, fmt, ap);
@@ -148,12 +151,12 @@ void error(int status, int errornum, const char *fmt, ...)
 	if (errornum)
 		fprintf(stderr, ": %s\n", strerror(errornum));
 	free(buf2);
-
+	
 	if (status)
 		exit(status);
 }
 
-int getline(char **line, size_t * length, FILE * stream)
+int getline(char **line, size_t *length, FILE *stream)
 {
 	char *tmpline;
 	size_t len;
