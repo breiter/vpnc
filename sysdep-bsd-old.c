@@ -81,6 +81,62 @@ int tun_read(int fd, char *buf, int len)
 /***********************************************************************/
 /* other support functions */
 
+void config_tunnel(const char *dev, struct in_addr myaddr)
+{
+  int sock;
+  struct ifreq ifr;
+  uint8_t *addr;
+
+  /* prepare socket and ifr */
+  sock = socket (AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0)
+    error (1, errno, "making socket");
+  memset (&ifr, 0, sizeof(ifr));
+  memcpy (ifr.ifr_name, dev, IFNAMSIZ);
+  
+  addr = (uint8_t *)&((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr;
+  
+  /* set my address */
+  ifr.ifr_addr.sa_family = AF_INET;
+  memcpy (addr, &myaddr, 4);
+  if (ioctl (sock, SIOCSIFADDR, &ifr) != 0)
+    error (1, errno, "setting interface address");
+  
+  /* set p-t-p addr (== my address) */
+  ifr.ifr_addr.sa_family = AF_INET;
+  memcpy (addr, &myaddr, 4);
+  if (ioctl (sock, SIOCSIFDSTADDR, &ifr) != 0)
+    error (1, errno, "setting interface address");
+  
+  /* set netmask (== 255.255.255.255) */
+  ifr.ifr_addr.sa_family = AF_INET;
+  memset (addr, 0xFF, 4);
+  if (ioctl (sock, SIOCSIFNETMASK, &ifr) != 0)
+    error (1, errno, "setting interface netmask");
+  
+  /* set MTU */
+  /* The magic constants are:
+     1500  the normal ethernet MTU
+     -20   the size of an IP header
+     -8    the size of an ESP header
+     -2    minimum padding length
+     -12   the size of the HMAC
+  ifr.ifr_mtu = 1500-20-8-2-12;
+   Override: experimental found best value */
+  ifr.ifr_mtu = 1412;
+  if (ioctl (sock, SIOCSIFMTU, &ifr) != 0)
+    error (1, errno, "setting interface MTU");
+  
+  /* set interface flags */
+  if (ioctl (sock, SIOCGIFFLAGS, &ifr) != 0)
+    error (1, errno, "getting interface flags");
+  ifr.ifr_flags |= (IFF_UP | IFF_RUNNING);
+  if (ioctl (sock, SIOCSIFFLAGS, &ifr) != 0)
+    error (1, errno, "setting interface flags");
+  
+  close (sock);
+}
+
 void error(int status, int errornum, const char *fmt, ...)
 {
 	char   *buf2;
