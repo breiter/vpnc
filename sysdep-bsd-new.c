@@ -67,57 +67,7 @@ int tun_close(int fd, char *dev)
     return close(fd);
 }
 
-#ifdef NEW_TUN
-#define MAX_MRU 2048
-struct tun_data {
-	union {
-		u_int32_t family;
-		u_int32_t timeout;
-	} header;
-	u_char data[MAX_MRU];
-};
-
 /* Read/write frames from TUN device */
-int tun_write(int fd, char *buf, int len)
-{
-    char *data;
-    struct tun_data tun;
-    
-    if (len > (int)sizeof(tun.data))
-	return -1;
-    
-    memcpy(tun.data, buf, len);
-    tun.header.family = htonl(AF_INET);
-    len += (sizeof(tun) - sizeof(tun.data));
-    data = (char *)&tun;
-    
-    return write(fd, data, len) - (sizeof(tun) - sizeof(tun.data));
-}
-
-int tun_read(int fd, char *buf, int len)
-{
-    struct tun_data tun;
-    char *data;
-    size_t sz;
-    int pack;
-    
-    data = (char *)&tun;
-    sz = sizeof(tun);
-    pack = read(fd, data, sz);
-    if (pack == -1)
-	    return -1;
-    
-    pack -= sz - sizeof(tun.data);
-    if (pack > len)
-	    pack = len; /* truncate paket */
-    
-    memcpy(buf, tun.data, pack);
-    
-    return pack;
-}
-
-#else
-
 int tun_write(int fd, char *buf, int len)
 {
     return write(fd, buf, len);
@@ -127,10 +77,63 @@ int tun_read(int fd, char *buf, int len)
 {
     return read(fd, buf, len);
 }
-#endif
 
 /***********************************************************************/
 /* other support functions */
+
+void config_tunnel(const char *dev, struct in_addr myaddr)
+{
+  int sock;
+  struct ifreq ifr;
+  struct  in_aliasreq ifra_old, ifra_new;
+  uint8_t *addr;
+
+  /* prepare socket and ifr */
+  sock = socket (AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0)
+    error (1, errno, "making socket");
+  memset (&ifr, 0, sizeof(ifr));
+  memset (&ifra_new, 0, sizeof(ifra_new));
+  memcpy (ifr.ifr_name, dev, IFNAMSIZ);
+  memcpy (ifra_new.ifra_name, dev, IFNAMSIZ);
+  
+  /* set my address */
+  ifra.ifra_addr.sa_family = AF_INET;
+  addr = (uint8_t *)&((struct sockaddr_in *)&ifra_new.ifra_addr)->sin_addr;
+  memcpy (addr, &myaddr, 4);
+  
+  /* set dest address (== my addr) */
+  ifra.ifra_dstaddr.sa_family = AF_INET;
+  addr = (uint8_t *)&((struct sockaddr_in *)&ifra_new.ifra_dstaddr)->sin_addr;
+  memcpy (addr, &myaddr, 4);
+  
+  /* set netmask (== 255.255.255.255) */
+  ifra.ifra_mask.sa_family = AF_INET;
+  addr = (uint8_t *)&((struct sockaddr_in *)&ifra_new.ifra_mask)->sin_addr;
+  memset (addr, 0xFF, 4);
+  
+  /* set MTU */
+  /* The magic constants are:
+     1500  the normal ethernet MTU
+     -20   the size of an IP header
+     -8    the size of an ESP header
+     -2    minimum padding length
+     -12   the size of the HMAC
+  ifr.ifr_mtu = 1500-20-8-2-12;
+   Override: experimental found best value */
+  ifr.ifr_mtu = 1412;
+  if (ioctl (sock, SIOCSIFMTU, &ifr) != 0)
+    error (1, errno, "setting interface MTU");
+  
+  /* set interface flags */
+  if (ioctl (sock, SIOCGIFFLAGS, &ifr) != 0)
+    error (1, errno, "getting interface flags");
+  ifr.ifr_flags |= (IFF_UP | IFF_RUNNING);
+  if (ioctl (sock, SIOCSIFFLAGS, &ifr) != 0)
+    error (1, errno, "setting interface flags");
+  
+  close (sock);
+}
 
 void error(int status, int errornum, const char *fmt, ...)
 {
