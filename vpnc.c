@@ -321,7 +321,7 @@ sendrecv(void *recvbuf, size_t recvbufsize, void *tosend, size_t sendsize, int s
 	pfd.events = POLLIN;
 	tries = 0;
 
-	if ((tosend != NULL)&&(encap_mode != IPSEC_ENCAP_TUNNEL)) {
+	if ((tosend != NULL)&&(encap_mode == IPSEC_ENCAP_UDP_TUNNEL)) {
 		DEBUG(2, printf("NAT-T mode, adding non-esp marker\n"));
 		realtosend = xallocc(sendsize+4);
 		memcpy(realtosend+4, tosend, sendsize);
@@ -359,13 +359,13 @@ sendrecv(void *recvbuf, size_t recvbufsize, void *tosend, size_t sendsize, int s
 		tries++;
 	}
 
-	if ((tosend != NULL)&&(encap_mode != IPSEC_ENCAP_TUNNEL))
+	if ((tosend != NULL)&&(encap_mode == IPSEC_ENCAP_UDP_TUNNEL))
 		free(realtosend);
 
 	if (sendonly)
 		return 0;
 
-	if (encap_mode != IPSEC_ENCAP_TUNNEL) {
+	if (encap_mode == IPSEC_ENCAP_UDP_TUNNEL) {
 		recvsize -= 4; /* 4 bytes non-esp marker */
 		memcpy(recvbuf, recvbuf+4, recvsize);
 	}
@@ -430,11 +430,8 @@ static uint16_t unpack_verify_phase2(struct sa_block *s,
 
 	*r_p = NULL;
 
-	if (r_length < ISAKMP_PAYLOAD_O || ((r_length - ISAKMP_PAYLOAD_O) % s->ivlen != 0)) {
-		DEBUG(2, printf("payload to short or not padded: len=%d, min=%d (ivlen=%d)\n",
-			r_length, ISAKMP_PAYLOAD_O, s->ivlen));
+	if (r_length < ISAKMP_PAYLOAD_O || ((r_length - ISAKMP_PAYLOAD_O) % s->ivlen != 0))
 		return ISAKMP_N_UNEQUAL_PAYLOAD_LENGTHS;
-	}
 
 	isakmp_crypt(s, r_packet, r_length, 0);
 
@@ -729,7 +726,7 @@ void do_phase_1(const char *key_id, const char *shared_key, struct sa_block *s)
 #endif
 
 	struct isakmp_packet *p1;
-	int seen_natt_vid = 0, seen_natd = 0, seen_natd_them = 0, seen_natd_us = 0, natd_type = 0;
+	int seen_natt_vid = 0, seen_natd = 0, seen_natd_them = 0, seen_natd_us = 0;
 	unsigned char *natd_us = NULL, *natd_them = NULL;
 
 	DEBUG(2, printf("S4.1\n"));
@@ -953,8 +950,6 @@ void do_phase_1(const char *key_id, const char *shared_key, struct sa_block *s)
 				break;
 			case ISAKMP_PAYLOAD_NAT_D_OLD:
 			case ISAKMP_PAYLOAD_NAT_D:
-				natd_type = rp->type;
-				DEBUG(2, printf("peer is using type %d for NAT-Discovery payloads\n", natd_type));
 				if (!seen_sa || !seen_natt_vid) {
 					reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
 				} else if (config[CONFIG_DISABLE_NATT]) {
@@ -1197,8 +1192,7 @@ void do_phase_1(const char *key_id, const char *shared_key, struct sa_block *s)
 
 		/* include NAT traversal discovery payloads */
 		if (seen_natt_vid) {
-			assert(natd_type != 0);
-			pl = pl->next = new_isakmp_data_payload(natd_type,
+			pl = pl->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_NAT_D,
 				natd_them, s->md_len);
 			/* this could be repeated fo any known outbound interfaces */
 			{
@@ -1212,10 +1206,10 @@ void do_phase_1(const char *key_id, const char *shared_key, struct sa_block *s)
 				gcry_md_write(hm, &src_addr.sin_addr, sizeof(struct in_addr));
 				gcry_md_write(hm, &local_port, sizeof(uint16_t));
 				gcry_md_final(hm);
-				pl = pl->next = new_isakmp_data_payload(natd_type,
-					gcry_md_read(hm, 0), s->md_len);
-				if (seen_natd && memcmp(natd_us, pl->u.ke.data, s->md_len) == 0)
+				if (seen_natd && memcmp(natd_us, gcry_md_read(hm, 0), s->md_len) == 0)
 					seen_natd_us = 1;
+				pl = pl->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_NAT_D,
+					gcry_md_read(hm, 0), s->md_len);
 				gcry_md_close(hm);
 			}
 			if (seen_natd) {
@@ -1226,16 +1220,7 @@ void do_phase_1(const char *key_id, const char *shared_key, struct sa_block *s)
 			if (!seen_natd_us || !seen_natd_them) {
 				DEBUG(1, printf("NAT status: this end behind NAT? %s -- remote end behind NAT? %s\n",
 					seen_natd_us ? "no" : "YES", seen_natd_them ? "no" : "YES"));
-				switch (natd_type) {
-					case ISAKMP_PAYLOAD_NAT_D:
-						encap_mode = IPSEC_ENCAP_UDP_TUNNEL;
-						break;
-					case ISAKMP_PAYLOAD_NAT_D_OLD:
-						encap_mode = IPSEC_ENCAP_UDP_TUNNEL_OLD;
-						break;
-					default:
-						abort();
-				}
+				encap_mode = IPSEC_ENCAP_UDP_TUNNEL;
 				((struct sockaddr_in *)dest_addr)->sin_port = htons(4500);
 				if (local_port == htons(500)) {
 					close(sockfd);

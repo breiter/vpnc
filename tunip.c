@@ -596,6 +596,10 @@ void encap_esp_send_peer(struct encap_method *encap,
 	/* Fill non-mutable fields */
 	ip->ip_v = IPVERSION;
 	ip->ip_hl = 5;
+	ip->ip_len = encap->buflen + (peer->remote_sa->md_algo? 12 :0);
+#ifdef NEED_IPLEN_FIX
+	ip->ip_len = htons(ip->ip_len);
+#endif
 	/*gcry_md_get_algo_dlen(md_algo); see RFC .. only use 96 bit */
 	ip->ip_id = htons(ip_id++);
 	ip->ip_p = IPPROTO_ESP;
@@ -610,10 +614,6 @@ void encap_esp_send_peer(struct encap_method *encap,
 
 	encap_esp_encapsulate(encap, peer);
 
-	ip->ip_len = encap->buflen;
-#ifdef NEED_IPLEN_FIX
-	ip->ip_len = htons(ip->ip_len);
-#endif
 	ip->ip_sum = in_cksum((u_short *) encap->buf, sizeof(struct ip));
 
 	sent = sendto(encap->fd, encap->buf, encap->buflen, 0,
@@ -915,7 +915,6 @@ vpnc_doit(unsigned long tous_spi,
 				exit(1);
 			break;
 		case IPSEC_ENCAP_UDP_TUNNEL:
-		case IPSEC_ENCAP_UDP_TUNNEL_OLD:
 			if (encap_udp_new(&meth, udp_fd) == -1)
 				exit(1);
 			break;
