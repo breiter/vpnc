@@ -23,7 +23,7 @@ MANDIR=$(PREFIX)/share/man
 
 CC=gcc
 CFLAGS=-W -Wall -O -g '-DVERSION="$(shell cat VERSION)"' $(shell libgcrypt-config --cflags)
-LDFLAGS=-g $(shell libgcrypt-config --libs)
+LDFLAGS=-g $(shell libgcrypt-config --libs) -lssl
 
 ifeq ($(shell uname -s), Linux)
 SYSDEP=sysdep-linux.o

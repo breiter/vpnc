@@ -44,6 +44,9 @@ enum config_enum {
 	CONFIG_UDP_ENCAP,
 	CONFIG_UDP_ENCAP_PORT,
 	CONFIG_DISABLE_NATT,
+	CONFIG_HYBRID,
+	CONFIG_CA_FILE,
+	CONFIG_CA_DIR,
 	LAST_CONFIG
 };
 
@@ -58,6 +61,7 @@ extern const char *config[LAST_CONFIG];
 extern int opt_debug;
 extern int opt_nd;
 extern int opt_1des;
+extern int opt_hybrid;
 extern int opt_udpencap;
 extern uint16_t opt_udpencapport;
 

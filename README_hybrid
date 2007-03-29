@@ -1,0 +1,26 @@
+
+To use the hybrid extension add
+	Use Hybrid Auth
+to your .conf file or add
+	--hybrid
+when starting vpnc.
+
+The trusted root certificate may be passed by adding
+	CA-File <root_certificate.pem>
+to your .conf file or adding
+	--ca-file <root_certificate.pem>
+when starting vpnc.
+
+The trusted root certificate may be contained in a directory by adding
+	CA-Dir <trusted_certificate_directory>
+to your .conf file or adding
+	--ca-dir <trusted_certificate_directory>
+when starting vpnc.
+The default is 
+	/etc/ssl
+
+As the trusted certificate is referenced by the hash of the subject name, 
+the directory has to contain the certificate named like this hash_value. 
+A link can also be used like in /etc/ssl/Certs.
+The hash value can be calculated by e.g.
+	openssl x509 -in <ca_certfile.pem> -noout -hash

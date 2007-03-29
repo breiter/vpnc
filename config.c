@@ -54,6 +54,7 @@ const char *config[LAST_CONFIG];
 int opt_debug = 0;
 int opt_nd;
 int opt_1des;
+int opt_hybrid;
 int opt_udpencap;
 uint16_t opt_udpencapport;
 
@@ -106,11 +107,17 @@ static const char *config_def_pfs(void)
 static const char *config_def_local_port(void)
 {
 	return "500";
+	// return "502";
 }
 
 static const char *config_def_udp_port(void)
 {
 	return "10000";
+}
+
+static const char *config_ca_dir(void)
+{
+	return "/etc/ssl";
 }
 
 static const char *config_def_app_version(void)
@@ -294,6 +301,27 @@ static const struct config_names_s {
 		NULL,
 		"Don't ask anything, exit on missing options",
 		NULL
+	}, {
+		CONFIG_HYBRID, 0, 1,
+		"--hybrid",
+		"Use Hybrid Auth",
+		NULL,
+		"enables to use the Hybrid-Authentication Mode for IKE",
+		NULL
+	}, {
+		CONFIG_CA_FILE, 1, 1,
+		"--ca-file",
+		"CA-File",
+		"<filename>",
+		"filename and path to the CA-PEM-File",
+		NULL
+	}, {
+		CONFIG_CA_DIR, 1, 1,
+		"--ca-dir",
+		"CA-Dir",
+		NULL,
+		"path of the trusted CA-Directory",
+		config_ca_dir
 	}, {
 		0, 0, 0, NULL, NULL, NULL, NULL, NULL
 	}
@@ -496,6 +524,7 @@ void do_config(int argc, char **argv)
 		opt_debug = (config[CONFIG_DEBUG]) ? atoi(config[CONFIG_DEBUG]) : 0;
 		opt_nd = (config[CONFIG_ND]) ? 1 : 0;
 		opt_1des = (config[CONFIG_ENABLE_1DES]) ? 1 : 0;
+		opt_hybrid = (config[CONFIG_HYBRID]) ? 1 : 0;
 		opt_udpencap=(config[CONFIG_UDP_ENCAP]) ? 1 : 0;
 		opt_udpencapport=atoi(config[CONFIG_UDP_ENCAP_PORT]);
 	}
