@@ -35,6 +35,13 @@ void *xallocc(size_t x)
 	return result;
 }
 
+void *dup_data(void *data, size_t x)
+{
+	void *newdata = xallocc(x);
+	memcpy(newdata, data, x);
+	return newdata;
+}
+
 struct flow {
 	size_t len;
 	uint8_t *base;
@@ -264,6 +271,7 @@ void flatten_isakmp_packet(struct isakmp_packet *p, uint8_t ** result, size_t * 
 	 /*DUMP*/ if (opt_debug >= 3) {
 		printf("\n sending: ========================>\n");
 		free_isakmp_packet(parse_isakmp_packet(f.base, f.end - f.base, NULL));
+		printf("\n ==================================\n");
 	}
 }
 
@@ -286,6 +294,37 @@ struct isakmp_attribute *new_isakmp_attribute_16(uint16_t type, uint16_t data,
 	return r;
 }
 
+
+struct isakmp_attribute *dup_isakmp_attributes(struct isakmp_attribute *attributes)
+{
+	struct isakmp_attribute *att, *newatt, *prevatt = NULL, *start = NULL;
+	for (att = attributes; att; att = att->next) {
+		newatt = xallocc(sizeof(struct isakmp_attribute));
+		*newatt = *att;
+		if (att->af == isakmp_attr_lots)
+			att->u.lots.data = dup_data(att->u.lots.data, att->u.lots.length);
+		if (prevatt)
+			prevatt->next = newatt;
+		else
+			start = newatt;
+		newatt->next = NULL;
+		prevatt = newatt;
+	}
+
+	return start;
+}
+
+void free_isakmp_attributes(struct isakmp_attribute *attributes)
+{
+	struct isakmp_attribute *att, *nextatt;
+	for (att = attributes; att; att = nextatt) {
+		nextatt = att->next;
+		if (att->af == isakmp_attr_lots)
+			free(att->u.lots.data);
+		free(att);
+	}
+}
+
 struct isakmp_packet *new_isakmp_packet(void)
 {
 	return xallocc(sizeof(struct isakmp_packet));
@@ -293,7 +332,7 @@ struct isakmp_packet *new_isakmp_packet(void)
 
 struct isakmp_payload *new_isakmp_payload(uint8_t type)
 {
-	struct isakmp_payload *result = xallocc(sizeof(struct isakmp_packet));
+	struct isakmp_payload *result = xallocc(sizeof(struct isakmp_payload));
 	result->type = type;
 	return result;
 }
@@ -317,6 +356,62 @@ struct isakmp_payload *new_isakmp_data_payload(uint8_t type, const void *data, s
 	return result;
 }
 
+struct isakmp_payload *dup_isakmp_payload(struct isakmp_payload *p)
+{
+	struct isakmp_payload *np = xallocc(sizeof(struct isakmp_packet));
+	*np = *p;
+
+	switch (np->type) {
+	case ISAKMP_PAYLOAD_SA:
+		np->u.sa.proposals = dup_isakmp_payload(np->u.sa.proposals);
+		break;
+	case ISAKMP_PAYLOAD_P:
+		np->u.p.transforms = dup_isakmp_payload(np->u.p.transforms);
+		break;
+	case ISAKMP_PAYLOAD_T:
+		np->u.t.attributes = dup_isakmp_attributes(np->u.t.attributes);
+		break;
+	case ISAKMP_PAYLOAD_KE:
+	case ISAKMP_PAYLOAD_HASH:
+	case ISAKMP_PAYLOAD_SIG:
+	case ISAKMP_PAYLOAD_NONCE:
+	case ISAKMP_PAYLOAD_VID:
+	case ISAKMP_PAYLOAD_NAT_D:
+	case ISAKMP_PAYLOAD_NAT_D_OLD:
+		np->u.ke.data = dup_data(np->u.ke.data, np->u.ke.length);
+		break;
+	case ISAKMP_PAYLOAD_ID:
+		np->u.id.data = dup_data(np->u.id.data, np->u.id.length);
+		break;
+	case ISAKMP_PAYLOAD_CERT:
+	case ISAKMP_PAYLOAD_CR:
+		np->u.cert.data = dup_data(np->u.cert.data, np->u.cert.length);
+		break;
+	case ISAKMP_PAYLOAD_N:
+		np->u.n.spi = dup_data(np->u.n.spi, np->u.n.spi_length);
+		np->u.n.data = dup_data(np->u.n.data, np->u.n.data_length);
+		break;
+	case ISAKMP_PAYLOAD_D:
+		if (np->u.d.spi) {
+			int i;
+			np->u.d.spi = xallocc(np->u.d.num_spi * sizeof(uint8_t *));
+			for (i = 0; i < np->u.d.num_spi; i++)
+				np->u.d.spi[i] = dup_data(np->u.d.spi[i], np->u.d.spi_length);
+		}
+		break;
+	case ISAKMP_PAYLOAD_MODECFG_ATTR:
+		np->u.modecfg.attributes = dup_isakmp_attributes(np->u.modecfg.attributes);
+		break;
+	default:
+		abort();
+
+	}
+
+	/* unlike free_isakmp_payload this doesn't recurse */
+	np->next = NULL;
+	return np;
+}
+
 void free_isakmp_payload(struct isakmp_payload *p)
 {
 	struct isakmp_payload *nxt;
@@ -332,15 +427,7 @@ void free_isakmp_payload(struct isakmp_payload *p)
 		free_isakmp_payload(p->u.p.transforms);
 		break;
 	case ISAKMP_PAYLOAD_T:
-		{
-			struct isakmp_attribute *att, *natt;
-			for (att = p->u.t.attributes; att; att = natt) {
-				natt = att->next;
-				if (att->af == isakmp_attr_lots)
-					free(att->u.lots.data);
-				free(att);
-			}
-		}
+		free_isakmp_attributes(p->u.t.attributes);
 		break;
 	case ISAKMP_PAYLOAD_KE:
 	case ISAKMP_PAYLOAD_HASH:
@@ -371,15 +458,7 @@ void free_isakmp_payload(struct isakmp_payload *p)
 		}
 		break;
 	case ISAKMP_PAYLOAD_MODECFG_ATTR:
-		{
-			struct isakmp_attribute *att, *natt;
-			for (att = p->u.modecfg.attributes; att; att = natt) {
-				natt = att->next;
-				if (att->af == isakmp_attr_lots)
-					free(att->u.lots.data);
-				free(att);
-			}
-		}
+		free_isakmp_attributes(p->u.t.attributes);
 		break;
 	default:
 		abort();
@@ -667,10 +746,10 @@ static struct isakmp_payload *parse_isakmp_payload(uint8_t type,
 			*reject = ISAKMP_N_PAYLOAD_MALFORMED;
 			return r;
 		}
-		r->u.t.id = fetch2();
-		hex_dump("t.id", &r->u.t.id, UINT16);
+		r->u.modecfg.id = fetch2();
+		hex_dump("modecfg.id", &r->u.modecfg.id, UINT16);
 		length -= 8;
-		r->u.t.attributes = parse_isakmp_attributes(&data, length, reject);
+		r->u.modecfg.attributes = parse_isakmp_attributes(&data, length, reject);
 		data_len -= olength - 8;
 		break;
 

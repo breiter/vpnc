@@ -53,9 +53,11 @@ struct sa_block oursa[1];
 static int sockfd = -1;
 static struct sockaddr *dest_addr;
 static uint16_t local_port; /* in network byte order */
+static int ipsec_cry_algo, ipsec_hash_algo, dh_group;
 static uint16_t encap_mode = IPSEC_ENCAP_TUNNEL;
 static int timeout = 5000; /* 5 seconds */
 static uint8_t *resend_hash = NULL;
+uint8_t *tous_keys, *tothem_keys;
 
 static uint8_t r_packet[2048];
 static ssize_t r_length;
@@ -698,12 +700,15 @@ struct isakmp_attribute *make_transform_ike(int dh_group, int crypt, int hash, i
 {
 	struct isakmp_attribute *a = NULL;
 
+#if 0
 	a = new_isakmp_attribute(IKE_ATTRIB_LIFE_DURATION, a);
 	a->af = isakmp_attr_lots;
 	a->u.lots.length = 4;
 	a->u.lots.data = xallocc(a->u.lots.length);
 	*((uint32_t *) a->u.lots.data) = htonl(2147483);
 	a = new_isakmp_attribute_16(IKE_ATTRIB_LIFE_TYPE, IKE_LIFE_TYPE_SECONDS, a);
+#endif
+	a = new_isakmp_attribute_16(32767, 10, a);
 	a = new_isakmp_attribute_16(IKE_ATTRIB_GROUP_DESC, dh_group, a);
 	a = new_isakmp_attribute_16(IKE_ATTRIB_AUTH_METHOD, auth, a);
 	a = new_isakmp_attribute_16(IKE_ATTRIB_HASH, hash, a);
@@ -718,7 +723,7 @@ struct isakmp_payload *make_our_sa_ike(void)
 	struct isakmp_payload *r = new_isakmp_payload(ISAKMP_PAYLOAD_SA);
 	struct isakmp_payload *t = NULL, *tn;
 	struct isakmp_attribute *a;
-	int dh_grp = get_dh_group_ike()->ike_sa_id;
+	int dh_group_ike = get_dh_group_ike()->ike_sa_id;
 	unsigned int auth, crypt, hash, keylen;
 	int i;
 
@@ -726,7 +731,7 @@ struct isakmp_payload *make_our_sa_ike(void)
 	r->u.sa.situation = ISAKMP_IPSEC_SIT_IDENTITY_ONLY;
 	r->u.sa.proposals = new_isakmp_payload(ISAKMP_PAYLOAD_P);
 	r->u.sa.proposals->u.p.prot_id = ISAKMP_IPSEC_PROTO_ISAKMP;
-	for (auth = 0; supp_auth[auth].name != NULL; auth++) {
+	/* for (auth = 0; supp_auth[auth].name != NULL; auth++) { */ auth = 0;
 		for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
 			if ((supp_crypt[crypt].my_id == GCRY_CIPHER_DES) && (opt_1des == 0))
 				continue;
@@ -735,13 +740,13 @@ struct isakmp_payload *make_our_sa_ike(void)
 				tn = t;
 				t = new_isakmp_payload(ISAKMP_PAYLOAD_T);
 				t->u.t.id = ISAKMP_IPSEC_KEY_IKE;
-				a = make_transform_ike(dh_grp, supp_crypt[crypt].ike_sa_id,
+				a = make_transform_ike(dh_group_ike, supp_crypt[crypt].ike_sa_id,
 					supp_hash[hash].ike_sa_id, keylen, supp_auth[auth].ike_sa_id);
 				t->u.t.attributes = a;
 				t->next = tn;
 			}
 		}
-	}
+	/* } */
 	for (i = 0, tn = t; tn; tn = tn->next)
 		tn->u.t.number = i++;
 	r->u.sa.proposals->u.p.transforms = t;
@@ -808,9 +813,10 @@ void do_phase_1(const char *key_id, const char *shared_key, struct sa_block *s)
 		l->u.id.type = ISAKMP_IPSEC_ID_KEY_ID;
 		l->u.id.protocol = IPPROTO_UDP;
 		l->u.id.port = ntohs(local_port);
-		l->u.id.length = strlen(key_id);
+		l->u.id.length = 24;
 		l->u.id.data = xallocc(l->u.id.length);
-		memcpy(l->u.id.data, key_id, strlen(key_id));
+		gcry_md_hash_buffer(GCRY_MD_SHA1, l->u.id.data, key_id, strlen(key_id));
+		/* memcpy(l->u.id.data, key_id, strlen(key_id)); */
 		l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
 			xauth_vid, sizeof(xauth_vid));
 		l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
@@ -927,6 +933,7 @@ void do_phase_1(const char *key_id, const char *shared_key, struct sa_block *s)
 							break;
 						case IKE_ATTRIB_LIFE_TYPE:
 						case IKE_ATTRIB_LIFE_DURATION:
+						case 32767:
 							break;
 						default:
 							DEBUG(1, printf
@@ -1050,13 +1057,27 @@ void do_phase_1(const char *key_id, const char *shared_key, struct sa_block *s)
 
 		/* Generate SKEYID.  */
 		{
+			char shared_key_sha1[20];
+			gcry_md_hd_t hm;
+			uint8_t *hmac;
+
+			gcry_md_hash_buffer(GCRY_MD_SHA1, shared_key_sha1, shared_key, strlen(shared_key));
+
+			gcry_md_open(&hm, GCRY_MD_SHA1, GCRY_MD_FLAG_HMAC);
+			gcry_md_setkey(hm, shared_key_sha1, sizeof(shared_key_sha1));
+			gcry_md_write(hm, key_id, strlen(key_id));
+			gcry_md_final(hm);
+			hmac = gcry_md_read(hm, 0);
+
 			gcry_md_open(&skeyid_ctx, s->md_algo, GCRY_MD_FLAG_HMAC);
-			gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
+			gcry_md_setkey(skeyid_ctx, hmac, 20);
 			gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
 			gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
 			gcry_md_final(skeyid_ctx);
 			skeyid = gcry_md_read(skeyid_ctx, 0);
 			hex_dump("skeyid", skeyid, s->md_len);
+
+			gcry_md_close(hm);
 		}
 
 		/* Verify the hash.  */
@@ -1398,6 +1419,13 @@ static int do_phase_2_xauth(struct sa_block *s)
 
 		if (reject == 0 && r->payload->next->u.modecfg.type == ISAKMP_MODECFG_CFG_SET)
 			break;
+		if (reject == 0 && r->payload->next->u.modecfg.type == 5)
+			break;
+		if (reject == 0 && r->payload->next->u.modecfg.type == 6)
+		{
+			printf("authentication failed\n");
+			break;
+		}
 		if (reject == 0 && r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REQUEST)
 			reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
 
@@ -1501,8 +1529,8 @@ static int do_phase_2_xauth(struct sa_block *s)
 					memset(pass, 0, na->u.lots.length);
 				} else {
 					struct isakmp_attribute *na;
-					na = new_isakmp_attribute(ap->type, reply_attr);
-					reply_attr = na;
+					na = reply_attr->next = new_isakmp_attribute(ISAKMP_XAUTH_ATTRIB_PASSCODE, /* reply_attr */ NULL);
+					/* reply_attr = na; */
 					na->u.lots.length = strlen(config[CONFIG_XAUTH_PASSWORD]);
 					na->u.lots.data = xallocc(na->u.lots.length);
 					memcpy(na->u.lots.data, config[CONFIG_XAUTH_PASSWORD],
@@ -1512,6 +1540,8 @@ static int do_phase_2_xauth(struct sa_block *s)
 			default:
 				;
 			}
+
+		reply_attr = new_isakmp_attribute_16(ISAKMP_XAUTH_ATTRIB_TYPE, 5, reply_attr);
 
 		/* Send the response.  */
 		rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
@@ -1525,6 +1555,7 @@ static int do_phase_2_xauth(struct sa_block *s)
 	}
 
 	DEBUG(2, printf("S5.6\n"));
+#if 0
 	{
 		/* The final SET should have just one attribute.  */
 		int reject = 0;
@@ -1549,76 +1580,32 @@ static int do_phase_2_xauth(struct sa_block *s)
 		if (set_result == 0)
 			error(2, 0, "authentication unsuccessful");
 	}
+#endif
 	DEBUG(2, printf("S5.7\n"));
 	return 0;
 }
 
-static int do_phase_2_config(struct sa_block *s)
+static void process_config(struct sa_block *s, struct isakmp_packet *r)
 {
-	struct isakmp_payload *rp;
 	struct isakmp_attribute *a;
-	struct isakmp_packet *r;
-	struct utsname uts;
-	uint32_t msgid;
-	int reject;
-	int seen_address = 0;
+	int reject = 0, seen_address = 0;
 	char *strbuf;
 
-	uname(&uts);
-
-	gcry_randomize((uint8_t *) & msgid, sizeof(msgid), GCRY_WEAK_RANDOM);
-	if (msgid == 0)
-		msgid = 1;
-
-	rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
-	rp->u.modecfg.type = ISAKMP_MODECFG_CFG_REQUEST;
-	rp->u.modecfg.id = 20;
-	a = NULL;
-
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_APPLICATION_VERSION, a);
-	a->u.lots.length = strlen(config[CONFIG_VERSION]);
-	a->u.lots.data = xallocc(a->u.lots.length);
-	memcpy(a->u.lots.data, config[CONFIG_VERSION], a->u.lots.length);
-
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DDNS_HOSTNAME, a);
-	a->u.lots.length = strlen(uts.nodename);
-	a->u.lots.data = xallocc(a->u.lots.length);
-	memcpy(a->u.lots.data, uts.nodename, a->u.lots.length);
-
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_BANNER, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DO_PFS, a);
-	if (opt_udpencap)
-		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_UDP_ENCAP_PORT, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DEF_DOMAIN, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_NBNS, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_DNS, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_NETMASK, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_ADDRESS, a);
-
-	rp->u.modecfg.attributes = a;
-	sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION, msgid, 0, 0, 0, 0, 0, 0, 0);
-
-	/* recv and check for notices */
-	reject = do_phase2_notice_check(s, &r);
-	if (reject == -1)
-		return 1;
-		
-	/* Check the transaction type & message ID are OK.  */
-	if (reject == 0 && r->message_id != msgid)
-		reject = ISAKMP_N_INVALID_MESSAGE_ID;
-	if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
+	if (r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
 		reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
 
 	/* After the hash, expect an attribute block.  */
 	if (reject == 0
 		&& (r->payload->next == NULL
 			|| r->payload->next->next != NULL
-			|| r->payload->next->type != ISAKMP_PAYLOAD_MODECFG_ATTR
-#if 0
-			|| r->payload->next->u.modecfg.id != 20
-#endif
-			|| r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REPLY))
+			|| r->payload->next->type != ISAKMP_PAYLOAD_MODECFG_ATTR))
 		reject = ISAKMP_N_PAYLOAD_MALFORMED;
+
+	if (reject == 0
+		&& (r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REPLY)
+		&& (r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_SET))
+		reject = ISAKMP_N_PAYLOAD_MALFORMED;
+
 
 	if (reject != 0)
 		phase2_fatal(s, "configuration response rejected: %s", reject);
@@ -1721,6 +1708,7 @@ static int do_phase_2_config(struct sa_block *s)
 			break;
 		}
 
+
 	if (reject == 0 && !seen_address)
 		reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
 
@@ -1728,8 +1716,98 @@ static int do_phase_2_config(struct sa_block *s)
 		phase2_fatal(s, "configuration response rejected: %s", reject);
 
 	DEBUG(1, printf("got address %s\n", getenv("INTERNAL_IP4_ADDRESS")));
+}
+
+static int do_phase_2_config(struct sa_block *s)
+{
+	struct isakmp_packet *r;
+	struct isakmp_payload *rp;
+	struct isakmp_attribute *a, *reply_attr = NULL;
+	int reject;
+
+	r_length = sendrecv(r_packet, sizeof(r_packet), NULL, 0, 0);
+	reject = do_phase2_notice_check(s, &r);
+	if (reject == -1)
+		return 1;
+
+	process_config(s, r);
+
+	for (a = r->payload->next->u.modecfg.attributes; a; a = a->next)
+	{
+		if (a->af == isakmp_attr_16)
+			reply_attr = new_isakmp_attribute_16(a->type, 0, reply_attr);
+		else
+			reply_attr = new_isakmp_attribute(a->type, reply_attr);
+	}
+
+	rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
+	rp->u.modecfg.type = ISAKMP_MODECFG_CFG_ACK;
+	rp->u.modecfg.id = r->payload->next->u.modecfg.id;
+	rp->u.modecfg.attributes = reply_attr;
+	sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION,
+		r->message_id, 1, 0, 0, 0, 0, 0, 0);
 	return 0;
 }
+
+#if 0
+static int do_phase_2_config(struct sa_block *s)
+{
+	struct isakmp_payload *rp;
+	struct isakmp_attribute *a;
+	struct isakmp_packet *r;
+	struct utsname uts;
+	uint32_t msgid;
+	int reject;
+
+	uname(&uts);
+
+	gcry_randomize((uint8_t *) & msgid, sizeof(msgid), GCRY_WEAK_RANDOM);
+	if (msgid == 0)
+		msgid = 1;
+
+	rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
+	rp->u.modecfg.type = ISAKMP_MODECFG_CFG_REQUEST;
+	rp->u.modecfg.id = 20;
+	a = NULL;
+
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_APPLICATION_VERSION, a);
+	a->u.lots.length = strlen(config[CONFIG_VERSION]);
+	a->u.lots.data = xallocc(a->u.lots.length);
+	memcpy(a->u.lots.data, config[CONFIG_VERSION], a->u.lots.length);
+
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DDNS_HOSTNAME, a);
+	a->u.lots.length = strlen(uts.nodename);
+	a->u.lots.data = xallocc(a->u.lots.length);
+	memcpy(a->u.lots.data, uts.nodename, a->u.lots.length);
+
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_BANNER, a);
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DO_PFS, a);
+	if (opt_udpencap)
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_UDP_ENCAP_PORT, a);
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DEF_DOMAIN, a);
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_NBNS, a);
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_DNS, a);
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_NETMASK, a);
+	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_ADDRESS, a);
+
+	rp->u.modecfg.attributes = a;
+	sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION, msgid, 0, 0, 0, 0, 0, 0, 0);
+
+	/* recv and check for notices */
+	reject = do_phase2_notice_check(s, &r);
+	if (reject == -1)
+		return 1;
+
+	if (reject == 0 && r->message_id != msgid)
+		reject = ISAKMP_N_INVALID_MESSAGE_ID;
+
+	if (reject != 0)
+		phase2_fatal(s, "configuration response rejected: %s", reject);
+
+	process_config(s, r);
+	return 0;
+}
+#endif
 
 struct isakmp_attribute *make_transform_ipsec(int dh_group, int hash, int keylen)
 {
@@ -1752,7 +1830,7 @@ struct isakmp_attribute *make_transform_ipsec(int dh_group, int hash, int keylen
 	return a;
 }
 
-struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
+struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s, struct isakmp_payload *transform, int proposal_number)
 {
 	struct isakmp_payload *r = new_isakmp_payload(ISAKMP_PAYLOAD_SA);
 	struct isakmp_payload *p = NULL, *pn;
@@ -1764,38 +1842,223 @@ struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
 	r = new_isakmp_payload(ISAKMP_PAYLOAD_SA);
 	r->u.sa.doi = ISAKMP_DOI_IPSEC;
 	r->u.sa.situation = ISAKMP_IPSEC_SIT_IDENTITY_ONLY;
-	r->u.sa.proposals = new_isakmp_payload(ISAKMP_PAYLOAD_P);
-	r->u.sa.proposals->u.p.spi_size = 4;
-	r->u.sa.proposals->u.p.spi = xallocc(4);
-	/* The sadb_sa_spi field is already in network order.  */
-	memcpy(r->u.sa.proposals->u.p.spi, &s->tous_esp_spi, 4);
-	r->u.sa.proposals->u.p.prot_id = ISAKMP_IPSEC_PROTO_IPSEC_ESP;
-	for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
-		if ((supp_crypt[crypt].my_id == GCRY_CIPHER_DES) && (opt_1des == 0))
-			continue;
-		keylen = supp_crypt[crypt].keylen;
-		for (hash = 0; supp_hash[hash].name != NULL; hash++) {
-			pn = p;
-			p = new_isakmp_payload(ISAKMP_PAYLOAD_P);
-			p->u.p.spi_size = 4;
-			p->u.p.spi = xallocc(4);
-			/* The sadb_sa_spi field is already in network order.  */
-			memcpy(p->u.p.spi, &s->tous_esp_spi, 4);
-			p->u.p.prot_id = ISAKMP_IPSEC_PROTO_IPSEC_ESP;
-			p->u.p.transforms = new_isakmp_payload(ISAKMP_PAYLOAD_T);
-			p->u.p.transforms->u.t.id = supp_crypt[crypt].ipsec_sa_id;
-			a = make_transform_ipsec(dh_grp, supp_hash[hash].ipsec_sa_id, keylen);
-			p->u.p.transforms->u.t.attributes = a;
-			p->next = pn;
+	if (transform) {
+		p = new_isakmp_payload(ISAKMP_PAYLOAD_P);
+		p->u.p.spi_size = 4;
+		p->u.p.spi = xallocc(4);
+		/* The sadb_sa_spi field is already in network order.  */
+		memcpy(p->u.p.spi, &s->tous_esp_spi, 4);
+		p->u.p.prot_id = ISAKMP_IPSEC_PROTO_IPSEC_ESP;
+		p->u.p.transforms = dup_isakmp_payload(transform);
+		p->u.p.number = proposal_number;
+	} else {
+		for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
+			if ((supp_crypt[crypt].my_id == GCRY_CIPHER_DES) && (opt_1des == 0))
+				continue;
+			keylen = supp_crypt[crypt].keylen;
+			for (hash = 0; supp_hash[hash].name != NULL; hash++) {
+				pn = p;
+				p = new_isakmp_payload(ISAKMP_PAYLOAD_P);
+				p->u.p.spi_size = 4;
+				p->u.p.spi = xallocc(4);
+				/* The sadb_sa_spi field is already in network order.  */
+				memcpy(p->u.p.spi, &s->tous_esp_spi, 4);
+				p->u.p.prot_id = ISAKMP_IPSEC_PROTO_IPSEC_ESP;
+				p->u.p.transforms = new_isakmp_payload(ISAKMP_PAYLOAD_T);
+				p->u.p.transforms->u.t.id = supp_crypt[crypt].ipsec_sa_id;
+				a = make_transform_ipsec(dh_grp, supp_hash[hash].ipsec_sa_id, keylen);
+				p->u.p.transforms->u.t.attributes = a;
+				p->next = pn;
+			}
 		}
+		for (i = 0, pn = p; pn; pn = pn->next)
+			pn->u.p.number = i++;
 	}
-	for (i = 0, pn = p; pn; pn = pn->next)
-		pn->u.p.number = i++;
 	r->u.sa.proposals = p;
 	return r;
 }
 
-static void setup_link(struct sa_block *s)
+static int check_transform(struct isakmp_payload *transform)
+{
+	int seen_enc, seen_auth = 0, seen_encap = 0, seen_group = 0, seen_keylen = 0;
+	struct isakmp_attribute *a;
+	const supported_algo_t *cry_algo, *hash_algo;
+	int reject = 0;
+
+	seen_enc = transform->u.t.id;
+	for (a = transform->u.t.attributes; a; a = a->next)
+		switch (a->type) {
+		case ISAKMP_IPSEC_ATTRIB_AUTH_ALG:
+			if (a->af == isakmp_attr_16)
+				seen_auth = a->u.attr_16;
+			else
+				reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+			break;
+		case ISAKMP_IPSEC_ATTRIB_ENCAP_MODE:
+			if (a->af == isakmp_attr_16)
+				seen_encap = a->u.attr_16;
+			else
+				reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+			break;
+		case ISAKMP_IPSEC_ATTRIB_GROUP_DESC:
+			if (a->af == isakmp_attr_16)
+				seen_group = a->u.attr_16;
+			else
+				reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+			break;
+		case ISAKMP_IPSEC_ATTRIB_KEY_LENGTH:
+			if (a->af == isakmp_attr_16)
+				seen_keylen = a->u.attr_16;
+			else
+				reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+			break;
+		case ISAKMP_IPSEC_ATTRIB_SA_LIFE_TYPE:
+		case ISAKMP_IPSEC_ATTRIB_SA_LIFE_DURATION:
+			break;
+		default:
+			continue;
+		}
+
+	if (!seen_auth
+	    || (seen_encap && (seen_encap != encap_mode))
+	    || (dh_group && (seen_group != dh_group)))
+		return 0;
+
+	cry_algo = get_algo(SUPP_ALGO_CRYPT, SUPP_ALGO_IPSEC_SA, seen_enc, NULL, seen_keylen);
+	hash_algo = get_algo(SUPP_ALGO_HASH, SUPP_ALGO_IPSEC_SA, seen_auth, NULL, 0);
+	if ((cry_algo == NULL) || (hash_algo == NULL))
+		return 0;
+
+	ipsec_cry_algo = cry_algo->my_id;
+	ipsec_hash_algo = hash_algo->my_id;
+	dh_group = seen_group;
+	DEBUG(1, printf("IPSEC SA selected %s-%s\n", cry_algo->name, hash_algo->name));
+	return 1;
+}
+
+
+static void do_phase_2(struct sa_block *s)
+{
+	struct isakmp_packet *r;
+	struct isakmp_payload *rp, *proposal = NULL, *transform = NULL, *ke = NULL, *nonce_i = NULL, *idci = NULL, *idcr = NULL;
+	uint8_t nonce[20], *dh_public, *dh_shared_secret = NULL;
+
+	static struct group *dh_grp;
+	int reject;
+
+	r_length = sendrecv(r_packet, sizeof(r_packet), NULL, 0, 0);
+	reject = do_phase2_notice_check(s, &r);
+
+	if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_IKE_QUICK)
+		reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
+
+	/* The SA payload must be second.  */
+	if (reject == 0 && r->payload->next->type != ISAKMP_PAYLOAD_SA)
+		reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
+
+	for (rp = r->payload->next; rp && reject == 0; rp = rp->next)
+		switch (rp->type) {
+		case ISAKMP_PAYLOAD_SA:
+			if (reject == 0 && rp->u.sa.doi != ISAKMP_DOI_IPSEC)
+				reject = ISAKMP_N_DOI_NOT_SUPPORTED;
+			if (reject == 0 && rp->u.sa.situation != ISAKMP_IPSEC_SIT_IDENTITY_ONLY)
+				reject = ISAKMP_N_SITUATION_NOT_SUPPORTED;
+			if (reject != 0)
+				break;
+			for (proposal = rp->u.sa.proposals; proposal; proposal = proposal->next)
+			{
+				if (proposal->u.p.prot_id != ISAKMP_IPSEC_PROTO_IPSEC_ESP)
+					continue;
+				if (proposal->u.p.spi_size != 4)
+					continue;
+				for (transform = proposal->u.p.transforms; transform; transform = transform->next)
+					if (check_transform(transform))
+						break;
+				if (!transform)
+					continue;
+				break;
+			}
+			if (!proposal)
+				reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+			break;
+		case ISAKMP_PAYLOAD_N:
+			break;
+		case ISAKMP_PAYLOAD_ID:
+			if (idci == NULL) idci = rp;
+			else if (idcr == NULL) idcr = rp;
+			else abort();
+			break;
+		case ISAKMP_PAYLOAD_KE:
+			ke = rp;
+			break;
+		case ISAKMP_PAYLOAD_NONCE:
+			nonce_i = rp;
+			break;
+
+		default:
+			reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
+			break;
+		}
+
+	if (reject != 0)
+		phase2_fatal(s, "quick mode response rejected: %s\ncheck pfs setting", reject);
+
+	memcpy((uint8_t *) & s->tothem_esp_spi, proposal->u.p.spi, sizeof(s->tothem_esp_spi));
+	gcry_randomize((uint8_t *) & s->tous_esp_spi, sizeof(s->tous_esp_spi), GCRY_WEAK_RANDOM);
+	rp = make_our_sa_ipsec(s, transform, proposal->u.p.number);
+	gcry_randomize((uint8_t *) nonce, sizeof(nonce), GCRY_WEAK_RANDOM);
+	rp->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_NONCE, nonce, sizeof(nonce));
+
+	/* copy IDci and IDcr from initiator */
+	if (idci)
+		idci = dup_isakmp_payload(idci);
+	if (idcr) {
+		idcr = dup_isakmp_payload(idcr);
+		idci->next = idcr;
+	}
+
+	if (!dh_group) {
+		rp->next->next = idci;
+		dh_grp = NULL;
+	} else {
+		const supported_algo_t *algo;
+
+		algo = get_algo(SUPP_ALGO_DH_GROUP, SUPP_ALGO_IPSEC_SA, dh_group, NULL, 0);
+		if (algo == NULL)
+			abort();
+
+		dh_grp = group_get(algo->my_id);
+		DEBUG(3, printf("len = %d\n", dh_getlen(dh_grp)));
+		dh_public = xallocc(dh_getlen(dh_grp));
+		dh_create_exchange(dh_grp, dh_public);
+		hex_dump("dh_public", dh_public, dh_getlen(dh_grp));
+
+		/* Determine the shared secret.  */
+		dh_shared_secret = xallocc(dh_getlen(dh_grp));
+		dh_create_shared(dh_grp, dh_shared_secret, ke->u.ke.data);
+		hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(dh_grp));
+
+		rp->next->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_KE,
+			dh_public, dh_getlen(dh_grp));
+		rp->next->next->next = idci;
+	}
+
+	sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_IKE_QUICK,
+			r->message_id, 0, 0, 0, nonce_i->u.nonce.data, nonce_i->u.nonce.length, 0, 0);
+
+	tous_keys = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->tous_esp_spi,
+			       ipsec_hash_algo, ipsec_cry_algo,
+			       dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
+			       nonce_i->u.nonce.data, nonce_i->u.nonce.length, nonce, sizeof(nonce));
+	tothem_keys = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->tothem_esp_spi,
+				 ipsec_hash_algo, ipsec_cry_algo,
+				 dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
+				 nonce_i->u.nonce.data, nonce_i->u.nonce.length, nonce, sizeof(nonce));
+
+}
+
+#if 0
+static void do_phase_2(struct sa_block *s)
 {
 	struct isakmp_payload *rp, *us, *ke = NULL, *them, *nonce_r = NULL;
 	struct isakmp_packet *r;
@@ -1815,10 +2078,15 @@ static void setup_link(struct sa_block *s)
 		dh_public = xallocc(dh_getlen(dh_grp));
 		dh_create_exchange(dh_grp, dh_public);
 		hex_dump("dh_public", dh_public, dh_getlen(dh_grp));
+
+		/* Determine the shared secret.  */
+		dh_shared_secret = xallocc(dh_getlen(dh_grp));
+		dh_create_shared(dh_grp, dh_shared_secret, ke->u.ke.data);
+		hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(dh_grp));
 	}
 
 	gcry_randomize((uint8_t *) & s->tous_esp_spi, sizeof(s->tous_esp_spi), GCRY_WEAK_RANDOM);
-	rp = make_our_sa_ipsec(s);
+	rp = make_our_sa_ipsec(s, NULL, 0);
 	gcry_randomize((uint8_t *) nonce, sizeof(nonce), GCRY_WEAK_RANDOM);
 	rp->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_NONCE, nonce, sizeof(nonce));
 
@@ -1995,6 +2263,7 @@ static void setup_link(struct sa_block *s)
 			}
 			break;
 
+
 		case ISAKMP_PAYLOAD_N:
 			break;
 		case ISAKMP_PAYLOAD_ID:
@@ -2057,35 +2326,22 @@ static void setup_link(struct sa_block *s)
 			nonce, sizeof(nonce), nonce_r->u.nonce.data, nonce_r->u.nonce.length);
 		isakmp_crypt(s, s->kill_packet, s->kill_packet_size, 1);
 	}
-	DEBUG(2, printf("S7.8\n"));
+}
+#endif
 
+static void setup_link(struct sa_block *s)
+{
 	/* Set up the interface here so it's ready when our acknowledgement
 	 * arrives.  */
+	DEBUG(2, printf("S7.8\n"));
 	config_tunnel(s);
 	DEBUG(2, printf("S7.9\n"));
 	{
-		uint8_t *tous_keys, *tothem_keys;
 		struct sockaddr_in tothem_dest, tous_dest;
-		unsigned char *dh_shared_secret = NULL;
 		int tunnelfd = sockfd;
-
-		if (dh_grp) {
-			/* Determine the shared secret.  */
-			dh_shared_secret = xallocc(dh_getlen(dh_grp));
-			dh_create_shared(dh_grp, dh_shared_secret, ke->u.ke.data);
-			hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(dh_grp));
-		}
-		tous_keys = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->tous_esp_spi,
-			ipsec_hash_algo, ipsec_cry_algo,
-			dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
-			nonce, sizeof(nonce), nonce_r->u.nonce.data, nonce_r->u.nonce.length);
 		memset(&tothem_dest, 0, sizeof(tothem_dest));
 		tothem_dest.sin_family = AF_INET;
 		memcpy(&tothem_dest.sin_addr, s->our_address, 4);
-		tothem_keys = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->tothem_esp_spi,
-			ipsec_hash_algo, ipsec_cry_algo,
-			dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
-			nonce, sizeof(nonce), nonce_r->u.nonce.data, nonce_r->u.nonce.length);
 		memcpy(&tous_dest, dest_addr, sizeof(tous_dest));
 		if (opt_udpencap && s->peer_udpencap_port) {
 			close(tunnelfd);
@@ -2132,11 +2388,12 @@ int main(int argc, char **argv)
 		DEBUG(2, printf("S4\n"));
 		do_phase_1(config[CONFIG_IPSEC_ID], config[CONFIG_IPSEC_SECRET], oursa);
 		DEBUG(2, printf("S5\n"));
-		if (oursa->auth_algo == IKE_AUTH_XAUTHInitPreShared)
-			do_load_balance = do_phase_2_xauth(oursa);
+		/* if (oursa->auth_algo == IKE_AUTH_XAUTHInitPreShared) */
+		do_load_balance = do_phase_2_xauth(oursa);
 		DEBUG(2, printf("S6\n"));
-		if (do_load_balance == 0)
-			do_load_balance = do_phase_2_config(oursa);
+		/* if (do_load_balance == 0) */
+		do_load_balance = do_phase_2_config(oursa);
+		do_phase_2(oursa);
 	} while (do_load_balance);
 	DEBUG(2, printf("S7\n"));
 	setup_link(oursa);

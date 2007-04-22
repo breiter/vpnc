@@ -98,6 +98,7 @@ struct isakmp_payload {
 		} d;
 		struct {
 			uint8_t type;
+			uint8_t pad;
 			uint16_t id;
 			struct isakmp_attribute *attributes;
 		} modecfg;
@@ -115,13 +116,18 @@ struct isakmp_packet {
 };
 
 extern void *xallocc(size_t x);
+extern void *dup_data(void *data, size_t x);
 extern struct isakmp_packet *new_isakmp_packet(void);
 extern struct isakmp_payload *new_isakmp_payload(uint8_t);
 extern struct isakmp_payload *new_isakmp_data_payload(uint8_t type, const void *data,
 	size_t data_length);
+extern struct isakmp_payload *dup_isakmp_payload(struct isakmp_payload *p);
+extern void free_isakmp_payload(struct isakmp_payload *p);
 extern struct isakmp_attribute *new_isakmp_attribute(uint16_t, struct isakmp_attribute *);
 extern struct isakmp_attribute *new_isakmp_attribute_16(uint16_t type, uint16_t data,
 	struct isakmp_attribute *next);
+extern struct isakmp_attribute *dup_isakmp_attributes(struct isakmp_attribute *);
+extern void free_isakmp_attributes(struct isakmp_attribute *);
 extern void free_isakmp_packet(struct isakmp_packet *p);
 extern void flatten_isakmp_payload(struct isakmp_payload *p, uint8_t ** result, size_t * size);
 extern void flatten_isakmp_packet(struct isakmp_packet *p,
