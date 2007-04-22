@@ -1,5 +1,5 @@
 /* IPSec VPN client compatible with Cisco equipment.
-   Copyright (C) 2004-2005 Maurice Massar
+   Copyright (C) 2004 Maurice Massar
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,8 +14,6 @@
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-
-   $Id$
 */
 
 #define _GNU_SOURCE
@@ -28,44 +26,54 @@
 #include <errno.h>
 #include <sys/utsname.h>
 
-#include <gcrypt.h>
-
 #include "sysdep.h"
 #include "config.h"
 #include "vpnc.h"
-#include "supp.h"
+
+/*
+#include <assert.h>
+#include <sys/fcntl.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <poll.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+
+#include <gcrypt.h>
+
+#include "isakmp-pkt.h"
+#include "math_group.h"
+#include "dh.h"
+*/
 
 const char *config[LAST_CONFIG];
 
 int opt_debug = 0;
 int opt_nd;
-int opt_1des, opt_no_encryption;
-enum natt_mode_enum opt_natt_mode;
-enum vendor_enum opt_vendor;
-enum if_mode_enum opt_if_mode;
+int opt_1des;
+int opt_udpencap;
 uint16_t opt_udpencapport;
 
-void hex_dump(const char *str, const void *data, ssize_t len, const struct debug_strings *decode)
+void hex_dump(const char *str, const void *data, ssize_t len)
 {
 	size_t i;
 	const uint8_t *p = data;
-	const char *decodedval;
 
 	if (opt_debug < 3)
 		return;
 
 	switch (len) {
-	case DUMP_UINT8:
-		decodedval = val_to_string(*(uint8_t *)p, decode);
-		printf("%s: %02x%s\n", str, *(uint8_t *)p, decodedval);
+	case UINT8:
+		printf("%s: %02x\n", str, *(uint8_t *)p);
 		return;
-	case DUMP_UINT16:
-		decodedval = val_to_string(*(uint16_t *)p, decode);
-		printf("%s: %04x%s\n", str, *(uint16_t *)p, decodedval);
+	case UINT16:
+		printf("%s: %04x\n", str, *(uint16_t *)p);
 		return;
-	case DUMP_UINT32:
-		decodedval = val_to_string(*(uint32_t *)p, decode);
-		printf("%s: %08x%s\n", str, *(uint32_t *)p, decodedval);
+	case UINT32:
+		printf("%s: %08x\n", str, *(uint32_t *)p);
 		return;
 	}
 
@@ -78,130 +86,6 @@ void hex_dump(const char *str, const void *data, ssize_t len, const struct debug
 		printf("%02x", p[i]);
 	}
 	printf("\n");
-}
-
-static int hex2bin_c(unsigned int c)
-{
-	if ((c >= '0')&&(c <= '9'))
-		return c - '0';
-	if ((c >= 'A')&&(c <= 'F'))
-		return c - 'A' + 10;
-	if ((c >= 'a')&&(c <= 'f'))
-		return c - 'a' + 10;
-	return -1;
-}
-
-int hex2bin(const char *str, char **bin, int *len)
-{
-	char *p;
-	int i, l;
-	
-	if (!bin)
-		return EINVAL;
-	
-	for (i = 0; str[i] != '\0'; i++)
-		if (hex2bin_c(str[i]) == -1)
-			return EINVAL;
-	
-	l = i;
-	if ((l & 1) != 0)
-		return EINVAL;
-	l /= 2;
-	
-	p = malloc(l);
-	if (p == NULL)
-		return ENOMEM;
-	
-	for (i = 0; i < l; i++)
-		p[i] = hex2bin_c(str[i*2]) << 4 | hex2bin_c(str[i*2+1]);
-	
-	*bin = p;
-	if (len)
-		*len = l;
-	
-	return 0;
-}
-
-int deobfuscate(char *ct, int len, const char **resp, char *reslenp)
-{
-	const char *h1  = ct;
-	const char *h4  = ct + 20;
-	const char *enc = ct + 40;
-	
-	char ht[20], h2[20], h3[20], key[24];
-	const char *iv = h1;
-	char *res;
-	gcry_cipher_hd_t ctx;
-	int reslen;
-	
-	if (len < 48)
-		return -1;
-	len -= 40;
-	
-	memcpy(ht, h1, 20);
-	
-	ht[19]++;
-	gcry_md_hash_buffer(GCRY_MD_SHA1, h2, ht, 20);
-	
-	ht[19] += 2;
-	gcry_md_hash_buffer(GCRY_MD_SHA1, h3, ht, 20);
-	
-	memcpy(key, h2, 20);
-	memcpy(key+20, h3, 4);
-	/* who cares about parity anyway? */
-	
-	gcry_md_hash_buffer(GCRY_MD_SHA1, ht, enc, len);
-	
-	if (memcmp(h4, ht, 20) != 0)
-		return -1;
-	
-	res = malloc(len);
-	if (res == NULL)
-		return -1;
-	
-	gcry_cipher_open(&ctx, GCRY_CIPHER_3DES, GCRY_CIPHER_MODE_CBC, 0);
-	gcry_cipher_setkey(ctx, key, 24);
-	gcry_cipher_setiv(ctx, iv, 8);
-	gcry_cipher_decrypt(ctx, (unsigned char *)res, len, (unsigned char *)enc, len);
-	gcry_cipher_close(ctx);
-	
-	reslen = len - res[len-1];
-	res[reslen] = '\0';
-	
-	if (resp)
-		*resp = res;
-	if (reslenp)
-		*reslenp = reslen;
-	return 0;
-}
-
-static void config_deobfuscate(int obfuscated, int clear)
-{
-	int ret, len = 0;
-	char *bin = NULL;
-	
-	if (config[obfuscated] == NULL)
-		return;
-	
-	if (config[clear] != NULL) {
-		config[obfuscated] = NULL;
-		error(0, 0, "warning: ignoring obfuscated password because cleartext password set");
-		return;
-	}
-	
-	ret = hex2bin(config[obfuscated], &bin, &len);
-	if (ret != 0) {
-		error(1, 0, "error: deobfuscating of password failed (input not a hex string)");
-	}
-	
-	ret = deobfuscate(bin, len, config+clear, NULL);
-	free(bin);
-	if (ret != 0) {
-		error(1, 0, "error: deobfuscating of password failed");
-	}
-	
-	config[obfuscated] = NULL;
-	return;
 }
 
 static const char *config_def_description(void)
@@ -219,24 +103,9 @@ static const char *config_def_pfs(void)
 	return "server";
 }
 
-static const char *config_def_local_addr(void)
-{
-	return "0.0.0.0";
-}
-
 static const char *config_def_local_port(void)
 {
 	return "500";
-}
-
-static const char *config_def_if_mode(void)
-{
-	return "tun";
-}
-
-static const char *config_def_natt_mode(void)
-{
-	return "natt";
 }
 
 static const char *config_def_udp_port(void)
@@ -252,21 +121,6 @@ static const char *config_def_app_version(void)
 	uname(&uts);
 	asprintf(&version, "Cisco Systems VPN Client %s:%s", VERSION, uts.sysname);
 	return version;
-}
-
-static const char *config_def_script(void)
-{
-	return "/etc/vpnc/vpnc-script";
-}
-
-static const char *config_def_pid_file(void)
-{
-	return "/var/run/vpnc/pid";
-}
-
-static const char *config_def_vendor(void)
-{
-	return "cisco";
 }
 
 static const struct config_names_s {
@@ -309,14 +163,7 @@ static const struct config_names_s {
 		NULL,
 		"IPSec secret ",
 		"<ASCII string>",
-		"your group password (cleartext)",
-		NULL
-	}, {
-		CONFIG_IPSEC_SECRET_OBF, 1, 1,
-		NULL,
-		"IPSec obfuscated secret ",
-		"<hex string>",
-		"your group password (obfuscated)",
+		"your group password (cleartext, no support for obfuscated strings)",
 		NULL
 	}, {
 		CONFIG_XAUTH_USERNAME, 1, 0,
@@ -330,14 +177,14 @@ static const struct config_names_s {
 		NULL,
 		"Xauth password ",
 		"<ASCII string>",
-		"your password (cleartext)",
+		"your password (cleartext, no support for obfuscated strings)",
 		NULL
 	}, {
-		CONFIG_XAUTH_PASSWORD_OBF, 1, 1,
+		CONFIG_UDP_ENCAP, 0, 0,
+		"--udp",
+		"UDP Encapsulate",
 		NULL,
-		"Xauth obfuscated password ",
-		"<hex string>",
-		"your password (obfuscated)",
+		"Use Cisco-UDP encapsulation of IPSEC traffic",
 		NULL
 	}, {
 		CONFIG_DOMAIN, 1, 1,
@@ -354,37 +201,15 @@ static const struct config_names_s {
 		"enable interactive extended authentication (for challange response auth)",
 		NULL
 	}, {
-		CONFIG_VENDOR, 1, 1,
-		"--vendor",
-		"Vendor ",
-		"<cisco/netscreen>",
-		"vendor of your IPSec gateway",
-		config_def_vendor
-	}, {
-		CONFIG_NATT_MODE, 1, 1,
-		"--natt-mode",
-		"NAT Traversal Mode ",
-		"<natt/none/force-natt/cisco-udp>",
-		"Which NAT-Traversal Method to use:\n"
-		" * natt -- NAT-T as defined in RFC3947\n"
-		" * none -- disable use of any NAT-T method\n"
-		" * force-natt -- always use NAT-T encapsulation even\n"
-		"                 without presence of a NAT device\n"
-		"                 (useful if the OS captures all ESP traffic)\n"
-		" * cisco-udp -- Cisco proprietary UDP encapsulation, commonly over Port 10000\n"
-		"Note: cisco-tcp encapsulation is not yet supported\n",
-		config_def_natt_mode
-	}, {
-		CONFIG_SCRIPT, 1, 1,
+		CONFIG_CONFIG_SCRIPT, 1, 1,
 		"--script",
-		"Script ",
+		"Config Script ",
 		"<command>",
 		"command is executed using system() to configure the interface,\n"
 		"routing and so on. Device name, IP, etc. are passed using enviroment\n"
 		"variables, see README. This script is executed right after ISAKMP is\n"
-		"done, but befor tunneling is enabled. It is called when vpnc\n"
-		"terminates too\n",
-		config_def_script
+		"done, but befor tunneling is enabled.\n",
+		sysdep_config_script
 	}, {
 		CONFIG_IKE_DH, 1, 1,
 		"--dh",
@@ -407,13 +232,6 @@ static const struct config_names_s {
 		"enables weak single DES encryption",
 		NULL
 	}, {
-		CONFIG_ENABLE_NO_ENCRYPTION, 0, 1,
-		"--enable-no-encryption",
-		"Enable no encryption",
-		NULL,
-		"enables using no encryption for data traffic (key exchanged must be encrypted)",
-		NULL
-	}, {
 		CONFIG_VERSION, 1, 1,
 		"--application-version",
 		"Application version ",
@@ -425,17 +243,8 @@ static const struct config_names_s {
 		"--ifname",
 		"Interface name ",
 		"<ASCII string>",
-		"visible name of the TUN/TAP interface",
+		"visible name of the TUN interface",
 		NULL
-	}, {
-		CONFIG_IF_MODE, 1, 1,
-		"--ifmode",
-		"Interface mode ",
-		"<tun/tap>",
-		"mode of TUN/TAP interface:\n"
-		" * tun: virtual point to point interface (default)\n"
-		" * tap: virtual ethernet interface\n",
-		config_def_if_mode
 	}, {
 		CONFIG_DEBUG, 1, 1,
 		"--debug",
@@ -456,14 +265,7 @@ static const struct config_names_s {
 		"Pidfile ",
 		"<filename>",
 		"store the pid of background process in <filename>",
-		config_def_pid_file
-	}, {
-		CONFIG_LOCAL_ADDR, 1, 1,
-		"--local-addr",
-		"Local Addr ",
-		"<ip/hostname>",
-		"local IP to use for ISAKMP / ESP / ... (0.0.0.0 == automatically assign)",
-		config_def_local_addr
+		NULL
 	}, {
 		CONFIG_LOCAL_PORT, 1, 1,
 		"--local-port",
@@ -474,13 +276,17 @@ static const struct config_names_s {
 	}, {
 		CONFIG_UDP_ENCAP_PORT, 1, 1,
 		"--udp-port",
-		"Cisco UDP Encapsulation Port ",
+		"UDP Encapsulation Port ",
 		"<0-65535>",
-		"local UDP port number to use (0 == use random port)\n"
-		"This is only relevant if cisco-udp nat-traversal is used.\n"
-		"This is the _local_ port, the remote udp port is discovered automatically.\n"
-		"It is especially not the cisco-tcp port\n",
+		"local UDP port number to use (0 == use random port)",
 		config_def_udp_port
+	}, {
+		CONFIG_DISABLE_NATT, 0, 1,
+		"--disable-natt",
+		"Disable NAT Traversal",
+		NULL,
+		"disable use of NAT-T",
+		NULL
 	}, {
 		CONFIG_NON_INTERACTIVE, 0, 1,
 		"--non-inter",
@@ -493,40 +299,18 @@ static const struct config_names_s {
 	}
 };
 
-static char *get_config_filename(const char *name, int add_dot_conf)
-{
-	char *realname;
-	
-	asprintf(&realname, "%s%s%s", index(name, '/') ? "" : "/etc/vpnc/", name, add_dot_conf ? ".conf" : "");
-	return realname;
-}
-
-static void read_config_file(const char *name, const char **configs, int missingok)
+static void read_config_file(char *name, const char **configs, int missingok)
 {
 	FILE *f;
 	char *line = NULL;
-	size_t line_length = 0;
+	ssize_t line_length = 0;
 	int linenum = 0;
-	char *realname;
 
-	if (!strcmp(name, "-")) {
-		f = stdin;
-		realname = strdup("stdin");
-	} else {
-		realname = get_config_filename(name, 0);
-		f = fopen(realname, "r");
-		if (f == NULL && errno == ENOENT) {
-			free(realname);
-			realname = get_config_filename(name, 1);
-			f = fopen(realname, "r");
-		}
-		if (missingok && f == NULL && errno == ENOENT) {
-			free(realname);
-			return;
-		}
-		if (f == NULL)
-			error(1, errno, "couldn't open `%s'", realname);
-	}
+	f = fopen(name, "r");
+	if (missingok && f == NULL && errno == ENOENT)
+		return;
+	if (f == NULL)
+		error(1, errno, "couldn't open `%s'", name);
 	for (;;) {
 		ssize_t llen;
 		int i;
@@ -535,18 +319,16 @@ static void read_config_file(const char *name, const char **configs, int missing
 		if (llen == -1 && feof(f))
 			break;
 		if (llen == -1)
-			error(1, errno, "reading `%s'", realname);
+			error(1, errno, "reading `%s'", name);
 		if (line[llen - 1] == '\n')
-			line[--llen] = 0;
-		if (line[llen - 1] == '\r')
-			line[--llen] = 0;
+			line[llen - 1] = 0;
 		linenum++;
 		for (i = 0; config_names[i].name != NULL; i++) {
 			if (config_names[i].nm == CONFIG_NONE)
 				continue;
 			if (strncasecmp(config_names[i].name, line,
 					strlen(config_names[i].name)) == 0) {
-				/* boolean implementation, using harmles pointer targets as true */
+				// boolean implementation, using harmles pointer targets as true
 				if (!config_names[i].needsArgument) {
 					configs[config_names[i].nm] = config_names[i].name;
 					break;
@@ -561,12 +343,8 @@ static void read_config_file(const char *name, const char **configs, int missing
 		}
 		if (config_names[i].name == NULL && line[0] != '#' && line[0] != 0)
 			error(0, 0, "warning: unknown configuration directive in %s at line %d",
-				realname, linenum);
+				name, linenum);
 	}
-	free(line);
-	free(realname);
-	if (strcmp(name, "-"))
-		fclose(f);
 }
 
 static void print_desc(const char *pre, const char *text)
@@ -574,7 +352,7 @@ static void print_desc(const char *pre, const char *text)
 	const char *p, *q;
 
 	for (p = text, q = strchr(p, '\n'); q; p = q+1, q = strchr(p, '\n'))
-		printf("%s%.*s\n", pre, (int)(q-p), p);
+		printf("%s%.*s\n", pre, q-p, p);
 
 	if (*p != '\0')
 		printf("%s%s\n", pre, p);
@@ -584,7 +362,7 @@ static void print_usage(char *argv0, int long_help)
 {
 	int c;
 
-	printf("Usage: %s [--version] [--print-config] [--help] [--long-help] [options] [config files]\n\n",
+	printf("Usage: %s [--version] [--print-config] [--help] [--long-help] [options] [config file]\n\n",
 		argv0);
 	printf("Legend:\n");
 	for (c = 0; config_names[c].name != NULL; c++) {
@@ -606,10 +384,6 @@ static void print_usage(char *argv0, int long_help)
 
 		printf("\n");
 	}
-	
-	if (!long_help)
-		printf("Use --long-help to see all options\n\n");
-	
 	printf("Report bugs to vpnc@unix-ag.uni-kl.de\n");
 }
 
@@ -618,7 +392,7 @@ static void print_version(void)
 	unsigned int i;
 
 	printf("vpnc version " VERSION "\n");
-	printf("Copyright (C) 2002-2006 Geoffrey Keating, Maurice Massar, others\n");
+	printf("Copyright (C) 2002-2004 Geoffrey Keating, Maurice Massar\n");
 	printf("vpnc comes with NO WARRANTY, to the extent permitted by law.\n"
 		"You may redistribute copies of vpnc under the terms of the GNU General\n"
 		"Public License.  For more information about these matters, see the files\n"
@@ -649,14 +423,12 @@ static void print_version(void)
 void do_config(int argc, char **argv)
 {
 	char *s;
-	int i, c, known;
-	int got_conffile = 0, print_config = 0;
-	size_t s_len;
+	int i, c, known, s_len;
+	int print_config = 0;
 
 	for (i = 1; i < argc; i++) {
-		if (argv[i][0] && (argv[i][0] != '-' || argv[i][1] == '\0')) {
+		if (argv[i][0] != '-') {
 			read_config_file(argv[i], config, 0);
-			got_conffile = 1;
 			continue;
 		}
 
@@ -711,65 +483,29 @@ void do_config(int argc, char **argv)
 			exit(1);
 		}
 	}
-	
-	if (!got_conffile) {
-		read_config_file("/etc/vpnc/default.conf", config, 1);
-		read_config_file("/etc/vpnc.conf", config, 1);
-	}
-	
+
+	read_config_file("/etc/vpnc/default.conf", config, 1);
+	read_config_file("/etc/vpnc.conf", config, 1);
+
 	if (!print_config) {
 		for (i = 0; config_names[i].name != NULL; i++)
 			if (!config[config_names[i].nm] && i != CONFIG_NONE
 				&& config_names[i].get_def != NULL)
 				config[config_names[i].nm] = config_names[i].get_def();
-		
+
 		opt_debug = (config[CONFIG_DEBUG]) ? atoi(config[CONFIG_DEBUG]) : 0;
 		opt_nd = (config[CONFIG_ND]) ? 1 : 0;
 		opt_1des = (config[CONFIG_ENABLE_1DES]) ? 1 : 0;
-		opt_no_encryption = (config[CONFIG_ENABLE_NO_ENCRYPTION]) ? 1 : 0;
+		opt_udpencap=(config[CONFIG_UDP_ENCAP]) ? 1 : 0;
 		opt_udpencapport=atoi(config[CONFIG_UDP_ENCAP_PORT]);
-		
-		if (!strcmp(config[CONFIG_NATT_MODE], "natt")) {
-			opt_natt_mode = NATT_NORMAL;
-		} else if (!strcmp(config[CONFIG_NATT_MODE], "none")) {
-			opt_natt_mode = NATT_NONE;
-		} else if (!strcmp(config[CONFIG_NATT_MODE], "force-natt")) {
-			opt_natt_mode = NATT_FORCE;
-		} else if (!strcmp(config[CONFIG_NATT_MODE], "cisco-udp")) {
-			opt_natt_mode = NATT_CISCO_UDP;
-		} else {
-			printf("%s: unknown nat traversal mode %s\nknown modes: natt none force-natt cisco-udp\n", argv[0], config[CONFIG_NATT_MODE]);
-			exit(1);
-		}
-		
-		if (!strcmp(config[CONFIG_IF_MODE], "tun")) {
-			opt_if_mode = IF_MODE_TUN;
-		} else if (!strcmp(config[CONFIG_IF_MODE], "tap")) {
-			opt_if_mode = IF_MODE_TAP;
-		} else {
-			printf("%s: unknown interface mode %s\nknown modes: tun tap\n", argv[0], config[CONFIG_IF_MODE]);
-			exit(1);
-		}
-		
-		if (!strcmp(config[CONFIG_VENDOR], "cisco")) {
-			opt_vendor = VENDOR_CISCO;
-		} else if (!strcmp(config[CONFIG_VENDOR], "netscreen")) {
-			opt_vendor = VENDOR_NETSCREEN;
-		} else {
-			printf("%s: unknown vendor %s\nknown vendors: cisco netscreen\n", argv[0], config[CONFIG_VENDOR]);
-			exit(1);
-		}
 	}
-	
+
 	if (opt_debug >= 99) {
 		printf("WARNING! active debug level is >= 99, output includes username and password (hex encoded)\n");
 		fprintf(stderr,
 			"WARNING! active debug level is >= 99, output includes username and password (hex encoded)\n");
 	}
-	
-	config_deobfuscate(CONFIG_IPSEC_SECRET_OBF, CONFIG_IPSEC_SECRET);
-	config_deobfuscate(CONFIG_XAUTH_PASSWORD_OBF, CONFIG_XAUTH_PASSWORD);
-	
+
 	for (i = 0; i < LAST_CONFIG; i++) {
 		if (config[i] != NULL || config[CONFIG_NON_INTERACTIVE] != NULL)
 			continue;
@@ -810,7 +546,7 @@ void do_config(int argc, char **argv)
 		case CONFIG_XAUTH_USERNAME:
 			getline(&s, &s_len, stdin);
 		}
-		if (s != NULL && strlen(s) > 0 && s[strlen(s) - 1] == '\n')
+		if (s != NULL && s[strlen(s) - 1] == '\n')
 			s[strlen(s) - 1] = 0;
 		config[i] = s;
 	}
