@@ -40,6 +40,19 @@
 
 #include <gcrypt.h>
 
+/* OpenSSL */
+#include <openssl/evp.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/crypto.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
+#include <openssl/conf.h>
+#include <openssl/rand.h>
+#include <openssl/ssl.h>
+#include <openssl/bio.h>
+
 #include "sysdep.h"
 #include "config.h"
 #include "isakmp-pkt.h"
@@ -54,7 +67,7 @@
 static int timeout = 1000; /* 1 second */
 static uint8_t *resend_hash = NULL;
 
-static uint8_t r_packet[2048];
+static uint8_t r_packet[8192];
 static ssize_t r_length;
 
 static __inline__ int min(int a, int b)
@@ -785,7 +798,20 @@ static struct isakmp_payload *make_our_sa_ike(void)
 	r->u.sa.proposals = new_isakmp_payload(ISAKMP_PAYLOAD_P);
 	r->u.sa.proposals->u.p.prot_id = ISAKMP_IPSEC_PROTO_ISAKMP;
 	for (auth = 0; supp_auth[auth].name != NULL; auth++) {
+
+		/* BEGIN - handle Hybrid Auth */
+		/* propose Hybrid Auth only, or no Hybrid Auth */
+		if ((supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitRSA) && 
+			(supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitDSS) && (opt_hybrid == 1))
+			continue;
+		if (((supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitRSA) || 
+			(supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitDSS)) && (opt_hybrid != 1))
+			continue;
+		/* END   - handle Hybrid Auth */
+
 		for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
+/* 			if ((supp_crypt[crypt].my_id == GCRY_CIPHER_DES) && (opt_1des == 0)) */
+/* 				continue; */
 			keylen = supp_crypt[crypt].keylen;
 			for (hash = 0; supp_hash[hash].name != NULL; hash++) {
 				tn = t;
@@ -864,6 +890,7 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 	struct group *dh_grp;
 	unsigned char *dh_public;
 	unsigned char *returned_hash;
+	unsigned char *psk_hash;
 	static const uint8_t xauth_vid[] = XAUTH_VENDOR_ID;
 	static const uint8_t unity_vid[] = UNITY_VENDOR_ID;
 	static const uint8_t unknown_vid[] = UNKNOWN_VENDOR_ID;
@@ -947,6 +974,7 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 			l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
 				natt_vid_00, sizeof(natt_vid_00));
 		}
+
 #if 0
 		l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
 			dpd_vid, sizeof(dpd_vid));
@@ -966,10 +994,17 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 		struct isakmp_payload *nonce = NULL;
 		struct isakmp_payload *ke = NULL;
 		struct isakmp_payload *hash = NULL;
+		struct isakmp_payload *last_cert = NULL;
+		struct isakmp_payload *sig = NULL;
 		struct isakmp_payload *idp = NULL;
 		int seen_sa = 0, seen_xauth_vid = 0;
+		unsigned char *psk_skeyid;
 		unsigned char *skeyid;
 		gcry_md_hd_t skeyid_ctx;
+
+		X509 *current_cert;
+		/* structure to store the certificate chain */
+		STACK_OF(X509) *cert_stack = sk_X509_new_null();
 
 		reject = 0;
 		r = parse_isakmp_packet(r_packet, r_length, &reject);
@@ -1126,6 +1161,20 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 			case ISAKMP_PAYLOAD_HASH:
 				hash = rp;
 				break;
+			case ISAKMP_PAYLOAD_CERT:
+				last_cert = rp;
+				
+				if (last_cert->u.cert.encoding == ISAKMP_CERT_X509_SIG) {
+					/* convert the certificate to an openssl-X509 structure and push it onto the chain stack */
+					current_cert = d2i_X509(NULL, &last_cert->u.cert.data, last_cert->u.cert.length);
+					sk_X509_push(cert_stack, current_cert);
+					last_cert->u.cert.data -= last_cert->u.cert.length; /* 'rewind' the pointer */
+				}
+
+				break;
+			case ISAKMP_PAYLOAD_SIG:
+				sig = rp;
+				break;
 			case ISAKMP_PAYLOAD_VID:
 				if (rp->u.vid.length == sizeof(xauth_vid)
 					&& memcmp(rp->u.vid.data, xauth_vid,
@@ -1216,10 +1265,27 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 			error(1, 0, "response was invalid [2]: %s(%d)", val_to_string(reject, isakmp_notify_enum_array), reject);
 		if (reject == 0 && idp == NULL)
 			reject = ISAKMP_N_INVALID_ID_INFORMATION;
-		if (reject == 0 && (hash == NULL || hash->u.hash.length != s->ike.md_len))
-			reject = ISAKMP_N_INVALID_HASH_INFORMATION;
+  
+		/* Decide if signature or hash is expected (sig only if vpnc is initiator of hybrid-auth */
+		int hash_expected, sig_expected;
+		hash_expected = sig_expected = 0;
+		if (s->ike.auth_algo == IKE_AUTH_HybridInitRSA || s->ike.auth_algo == IKE_AUTH_HybridInitDSS)
+		  sig_expected = 1;
+		else
+		  hash_expected = 1;
+		
+		if (reject == 0 && hash_expected && (hash == NULL || hash->u.hash.length != s->ike.md_len))
+		  reject = ISAKMP_N_INVALID_HASH_INFORMATION;
+                if (reject == 0 && sig_expected && sig == NULL)
+		  reject = ISAKMP_N_INVALID_SIGNATURE;
 		if (reject != 0)
-			error(1, 0, "response was invalid [3]: %s(%d)", val_to_string(reject, isakmp_notify_enum_array), reject);
+		  error(1, 0, "response was invalid [3]: %s(%d)", val_to_string(reject, isakmp_notify_enum_array), reject);
+
+		/* Determine the shared secret.  */
+                unsigned char *dh_shared_secret;
+                dh_shared_secret = xallocc(dh_getlen(dh_grp));
+                dh_create_shared(dh_grp, dh_shared_secret, ke->u.ke.data);
+		hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(dh_grp), NULL);
 
 		/* Generate SKEYID.  */
 		{
@@ -1228,6 +1294,41 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 			gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
 			gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
 			gcry_md_final(skeyid_ctx);
+			psk_skeyid = xallocc(s->ike.md_len);
+			memcpy(psk_skeyid, gcry_md_read(skeyid_ctx, 0), s->ike.md_len);
+			hex_dump("psk_skeyid", psk_skeyid, s->ike.md_len, NULL);
+			gcry_md_close(skeyid_ctx);
+			printf("shared-key: %s\n",shared_key);
+			
+			/* SKEYID - psk only */
+			if (s->ike.auth_algo == IKE_AUTH_PRESHARED || s->ike.auth_algo == IKE_AUTH_XAUTHInitPreShared ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHRespPreShared) 
+			{
+				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+				gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
+				gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
+				gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
+				gcry_md_final(skeyid_ctx);
+			}
+			else if (s->ike.auth_algo == IKE_AUTH_DSS || s->ike.auth_algo == IKE_AUTH_RSA_SIG || s->ike.auth_algo == IKE_AUTH_ECDSA_SIG ||
+				s->ike.auth_algo == IKE_AUTH_HybridInitRSA || s->ike.auth_algo == IKE_AUTH_HybridRespRSA || 
+				s->ike.auth_algo == IKE_AUTH_HybridInitDSS || s->ike.auth_algo == IKE_AUTH_HybridRespDSS ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHInitDSS || s->ike.auth_algo == IKE_AUTH_XAUTHRespDSS ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHInitRSA || s->ike.auth_algo == IKE_AUTH_XAUTHRespRSA) 
+			{
+				unsigned char *key;
+				int key_len;
+				key_len = sizeof(i_nonce) + nonce->u.nonce.length;
+				key = xallocc(key_len);
+				memcpy(key, i_nonce, sizeof(i_nonce));
+				memcpy(key + sizeof(i_nonce), nonce->u.nonce.data, nonce->u.nonce.length);
+				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+				gcry_md_setkey(skeyid_ctx, key, key_len);
+				gcry_md_write(skeyid_ctx, dh_shared_secret, dh_getlen(dh_grp));
+				gcry_md_final(skeyid_ctx);
+			}
+			else
+				error(1, 0, "SKEYID could not be computed: %s", "the selected authentication method is not supported");
 			skeyid = gcry_md_read(skeyid_ctx, 0);
 			hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
 		}
@@ -1259,12 +1360,141 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 			gcry_md_write(hm, idp_f + 4, idp_size - 4);
 			gcry_md_final(hm);
 			expected_hash = gcry_md_read(hm, 0);
+			hex_dump("expected hash", expected_hash, s->ike.md_len, NULL);
 
-			if (memcmp(expected_hash, hash->u.hash.data, s->ike.md_len) != 0) {
+			if (hash_expected && memcmp(expected_hash, hash->u.hash.data, s->ike.md_len) != 0) {
 				error(1, 0, "hash comparison failed: %s(%d)\ncheck group password!",
 					val_to_string(ISAKMP_N_AUTHENTICATION_FAILED, isakmp_notify_enum_array),
 					ISAKMP_N_AUTHENTICATION_FAILED);
 			}
+			if (hash_expected) {
+			  hex_dump("received hash", hash->u.hash.data, hash->u.hash.length, NULL);
+			}
+
+			if (sig_expected) {
+			  hex_dump("received signature", sig->u.sig.data, sig->u.sig.length, NULL);
+				
+				/* BEGIN - check the signature using OpenSSL */
+			
+				X509 		* x509;
+				EVP_PKEY 	* pkey;
+				RSA 		*rsa;
+				X509_STORE 	*store;
+				/* X509_LOOKUP	*lookup; */
+				X509_STORE_CTX	*verify_ctx;
+	
+				OpenSSL_add_all_ciphers();
+				OpenSSL_add_all_digests();
+				OpenSSL_add_all_algorithms();
+	
+				ERR_load_crypto_strings();
+	
+				hex_dump("last cert", last_cert->u.cert.data, last_cert->u.cert.length, NULL);
+				x509 = d2i_X509(NULL, &last_cert->u.cert.data, last_cert->u.cert.length);
+				if (x509 == NULL) {
+					ERR_print_errors_fp (stderr);
+					printf("x509 error\n");
+					exit (1);
+				}
+				printf("%08lx\n",X509_subject_name_hash(x509));
+	
+				/* BEGIN - verify certificate chain */
+				/* create the cert store */
+				if (!(store = X509_STORE_new())) {
+					printf("Error creating X509_STORE object\n");
+					exit (1);
+				}
+				/* load the CA certificates */
+				if (X509_STORE_load_locations (store, config[CONFIG_CA_FILE], config[CONFIG_CA_DIR]) != 1) {
+					printf("Error loading the CA file or directory\n");
+					exit (1);
+				}
+				if (X509_STORE_set_default_paths (store) != 1) {
+					printf("Error loading the system-wide CA certificates\n");
+					exit (1);
+				}
+
+				/* check CRLs */
+/*
+add the corresponding CRL for each CA in the chain to the lookup
+#define CRL_FILE "root-ca-crl.crl.pem"
+
+				if (!(lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file()))) {
+					printf("Error creating X509 lookup object.\n");
+					exit(1);
+				}
+				if (X509_load_crl_file(lookup, CRL_FILE, X509_FILETYPE_PEM) != 1) {
+					ERR_print_errors_fp(stderr);
+					printf("Error reading CRL file\n");
+					exit(1);
+				}
+				X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
+*/
+				/* create a verification context and initialize it */
+				if (!(verify_ctx = X509_STORE_CTX_new ())) {
+					printf("Error creating X509_STORE_CTX object\n");
+					exit(1);
+				}
+				/* X509_STORE_CTX_init did not return an error condition
+				in prior versions */
+				if (X509_STORE_CTX_init (verify_ctx, store, x509, cert_stack) != 1)
+					printf("Error intializing verification context\n");
+	
+				/* verify the certificate */
+				if (X509_verify_cert(verify_ctx) != 1) {
+					ERR_print_errors_fp(stderr);
+					printf("Error verifying the certificate-chain\n");
+					exit(1);
+				}
+				else
+					DEBUG(3, printf("Certificate-chain verified correctly!\n"));
+	
+				/* END   - verify certificate chain */
+	
+	
+				/* BEGIN - Signature Verification */
+				pkey = X509_get_pubkey(x509);
+				if (pkey == NULL) {
+					ERR_print_errors_fp (stderr);
+					exit (1);
+				}
+	
+				rsa = EVP_PKEY_get1_RSA(pkey);
+				if (rsa == NULL) {
+					ERR_print_errors_fp (stderr);
+					exit (1);
+				}
+				unsigned char *rec_hash;
+				rec_hash = xallocc(s->ike.md_len);
+				int decr_size = RSA_public_decrypt(sig->u.sig.length, sig->u.sig.data, rec_hash, rsa, RSA_PKCS1_PADDING);
+	
+				if (decr_size != (int) s->ike.md_len) {
+					printf("Decrypted-Size: %d\n",decr_size);
+					hex_dump("    decr_hash", rec_hash, decr_size, NULL);
+					hex_dump("expected hash", expected_hash, s->ike.md_len, NULL);
+				
+					error(1, 0, "The hash-value, which was decrypted from the received signature, and the expected hash-value differ in size.\n");
+				}
+				else {
+					if (memcmp(rec_hash, expected_hash, decr_size) != 0) {
+						printf("Decrypted-Size: %d\n",decr_size);
+						hex_dump("    decr_hash", rec_hash, decr_size, NULL);
+						hex_dump("expected hash", expected_hash, s->ike.md_len, NULL);
+	
+						error(1, 0, "The hash-value, which was decrypted from the received signature, and the expected hash-value differ.\n");
+					}
+					else {
+						DEBUG(3, printf("Signature MATCH!!\n"));
+					}
+				}
+				/* END - Signature Verification */
+	
+				EVP_PKEY_free(pkey);
+				free(rec_hash);
+	
+				/* END   - check the signature using OpenSSL */
+			}
+
 			gcry_md_close(hm);
 
 			gcry_md_open(&hm, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
@@ -1280,6 +1510,17 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 			memcpy(returned_hash, gcry_md_read(hm, 0), s->ike.md_len);
 			gcry_md_close(hm);
 			hex_dump("returned_hash", returned_hash, s->ike.md_len, NULL);
+
+			/* PRESHARED_KEY_HASH */
+			gcry_md_open(&hm, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+			gcry_md_setkey(hm, skeyid, s->ike.md_len);
+			gcry_md_write(hm, shared_key, strlen(shared_key));
+			gcry_md_final(hm);
+                        psk_hash = xallocc(s->ike.md_len);
+			memcpy(psk_hash, gcry_md_read(hm, 0), s->ike.md_len);
+			gcry_md_close(hm);
+			hex_dump("psk_hash", psk_hash, s->ike.md_len, NULL);
+			/* End PRESHARED_KEY_HASH */
 
 			free(sa_f);
 			free(idi);
@@ -1400,6 +1641,7 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 		p2->payload = new_isakmp_data_payload(ISAKMP_PAYLOAD_HASH,
 			returned_hash, s->ike.md_len);
 		p2->payload->next = pl = new_isakmp_payload(ISAKMP_PAYLOAD_N);
+		//p2->payload = pl = new_isakmp_payload(ISAKMP_PAYLOAD_N);
 		pl->u.n.doi = ISAKMP_DOI_IPSEC;
 		pl->u.n.protocol = ISAKMP_IPSEC_PROTO_ISAKMP;
 		pl->u.n.type = ISAKMP_N_IPSEC_INITIAL_CONTACT;
@@ -1407,8 +1649,28 @@ static void do_phase_1(const char *key_id, const char *shared_key, struct sa_blo
 		pl->u.n.spi = xallocc(2 * ISAKMP_COOKIE_LENGTH);
 		memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 0, s->ike.i_cookie, ISAKMP_COOKIE_LENGTH);
 		memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 1, s->ike.r_cookie, ISAKMP_COOKIE_LENGTH);
+
+
+                 /* send PSK-hash if hybrid authentication is negotiated */
+		if (s->ike.auth_algo == IKE_AUTH_HybridInitRSA || s->ike.auth_algo == IKE_AUTH_HybridInitDSS) {
+		  /* Notify - PRESHARED_KEY_HASH */
+		  pl = pl->next = new_isakmp_payload(ISAKMP_PAYLOAD_N);
+		  pl->u.n.doi = ISAKMP_DOI_IPSEC;
+		  pl->u.n.protocol = ISAKMP_IPSEC_PROTO_ISAKMP;
+		  pl->u.n.type =  ISAKMP_N_CISCO_PRESHARED_KEY_HASH; /* Notify Message - Type: PRESHARED_KEY_HASH */
+		  pl->u.n.spi_length = 2 * ISAKMP_COOKIE_LENGTH;
+		  pl->u.n.spi = xallocc(2 * ISAKMP_COOKIE_LENGTH);
+		  memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 0, s->ike.i_cookie, ISAKMP_COOKIE_LENGTH);
+		  memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 1, s->ike.r_cookie, ISAKMP_COOKIE_LENGTH);
+		  pl->u.n.data_length = s->ike.md_len;
+		  pl->u.n.data = xallocc(pl->u.n.data_length);
+		  memcpy(pl->u.n.data, psk_hash, pl->u.n.data_length);
+		  /* End Notify - PRESHARED_KEY_HASH */
+		}
+
 		pl = pl->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
 			unknown_vid, sizeof(unknown_vid));
+		//p2->payload->next = pl;
 		pl = pl->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
 			unity_vid, sizeof(unity_vid));
 
@@ -2572,7 +2834,7 @@ int main(int argc, char **argv)
 		DEBUG(2, printf("S4\n"));
 		do_phase_1(config[CONFIG_IPSEC_ID], config[CONFIG_IPSEC_SECRET], s);
 		DEBUG(2, printf("S5\n"));
-		if (s->ike.auth_algo == IKE_AUTH_XAUTHInitPreShared)
+		//if (s->ike.auth_algo == IKE_AUTH_XAUTHInitPreShared)
 			do_load_balance = do_phase_2_xauth(s);
 		DEBUG(2, printf("S6\n"));
 		if ((opt_vendor != VENDOR_NETSCREEN) && (do_load_balance == 0))

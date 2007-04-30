@@ -37,7 +37,7 @@ RELEASE_VERSION := $(shell cat VERSION)
 CC=gcc
 CFLAGS += -W -Wall -O3 -Wmissing-declarations -Wwrite-strings -g
 CPPFLAGS = -DVERSION=\"$(VERSION)\"
-LDFLAGS = -g $(shell libgcrypt-config --libs)
+LDFLAGS = -g $(shell libgcrypt-config --libs) -lssl
 CFLAGS +=  $(shell libgcrypt-config --cflags)
 
 ifeq ($(shell uname -s), SunOS)
