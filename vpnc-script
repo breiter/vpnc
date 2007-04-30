@@ -95,10 +95,6 @@ do_pre_init() {
 		if [ ! -e /dev/tun ]; then
 			kldload if_tun
 		fi
-	elif [ "$OS" = "GNU/kFreeBSD" ]; then
-		if [ ! -e /dev/tun ]; then
-			kldload if_tun
-		fi
 	elif [ "$OS" = "NetBSD" ]; then
 		:
 	elif [ "$OS" = "OpenBSD" ]; then
@@ -221,11 +217,9 @@ write_resolvconf() {
 # and will be overwritten by vpnc
 # as long as the above mark is intact"
 
-	# Remember the original value of CISCO_DEF_DOMAIN we need it later
-	CISCO_DEF_DOMAIN_ORIG="$CISCO_DEF_DOMAIN"
 	# Don't step on INTERNAL_IP4_DNS value, use a temporary variable
 	INTERNAL_IP4_DNS_TEMP="$INTERNAL_IP4_DNS"
-	exec 6< "$RESOLV_CONF_BACKUP"
+	exec 6< /etc/resolv.conf
 	while read LINE <&6 ; do
 		case "$LINE" in
 			nameserver*)
@@ -267,47 +261,45 @@ search $CISCO_DEF_DOMAIN"
 				;;
 			# 10.4 and later require use of scutil for DNS to work properly
 			*)
-				OVERRIDE_PRIMARY=""
-				if [ -n "$CISCO_SPLIT_INC" ]; then
-					if [ $CISCO_SPLIT_INC -lt 1 ]; then
-						# Must override for correct default route
-						# Cannot use multiple DNS matching in this case
-						OVERRIDE_PRIMARY='d.add OverridePrimary # 1'
-					fi
-				fi
-				# Uncomment the following if/fi pair to use multiple
-				# DNS matching when available.  When multiple DNS matching
-				# is present, anything reading the /etc/resolv.conf file
-				# directly will probably not work as intended.
-				#if [ -z "$CISCO_DEF_DOMAIN_ORIG" ]; then
-					# Cannot use multiple DNS matching without a domain
-					OVERRIDE_PRIMARY='d.add OverridePrimary # 1'
-				#fi
 				scutil >/dev/null 2>&1 <<-EOF
 					open
 					d.init
 					d.add ServerAddresses * $INTERNAL_IP4_DNS
 					set State:/Network/Service/$TUNDEV/DNS
-					d.init
-					d.add Router $INTERNAL_IP4_ADDRESS
+					get State:/Network/Global/IPv4
+					d.remove PrimaryService
+					d.remove PrimaryInterface
 					d.add Addresses * $INTERNAL_IP4_ADDRESS
 					d.add SubnetMasks * 255.255.255.255
 					d.add InterfaceName $TUNDEV
-					$OVERRIDE_PRIMARY
 					set State:/Network/Service/$TUNDEV/IPv4
 					close
 				EOF
-				if [ -n "$CISCO_DEF_DOMAIN_ORIG" ]; then
+				if [ -n "$CISCO_DEF_DOMAIN" ]; then
 					scutil >/dev/null 2>&1 <<-EOF
 						open
 						get State:/Network/Service/$TUNDEV/DNS
-						d.add DomainName $CISCO_DEF_DOMAIN_ORIG
-						d.add SearchDomains * $CISCO_DEF_DOMAIN_ORIG
-						d.add SupplementalMatchDomains * $CISCO_DEF_DOMAIN_ORIG
+						d.add DomainName $CISCO_DEF_DOMAIN
+						d.add SearchDomains * $CISCO_DEF_DOMAIN
+						d.add SupplementalMatchDomains * $CISCO_DEF_DOMAIN
 						set State:/Network/Service/$TUNDEV/DNS
 						close
 					EOF
 				fi
+				# Uncomment the following if/fi pair to use multiple
+				# DNS matching when available.  When multiple DNS matching
+				# is present, anything reading the /etc/resolv.conf file
+				# directly will probably not work as intended.
+				#if [ -z "$CISCO_DEF_DOMAIN" ]; then
+					# Cannot use multiple DNS matching without a domain
+					scutil >/dev/null 2>&1 <<-EOF
+						open
+						get State:/Network/Service/$TUNDEV/IPv4
+						d.add OverridePrimary # 1
+						set State:/Network/Service/$TUNDEV/IPv4
+						close
+					EOF
+				#fi
 				;;
 		esac
 	fi

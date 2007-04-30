@@ -23,7 +23,6 @@
 
 #include "isakmp.h"
 
-#include <time.h>
 #include <net/if.h>
 
 struct lifetime {
@@ -75,8 +74,6 @@ struct sa_block {
 	int esp_fd; /* raw socket for ip-esp or Cisco-UDP or ike_fd (NAT-T) */
 	
 	struct {
-		int timeout;
-		uint8_t *resend_hash;
 		uint16_t src_port, dst_port;
 		uint8_t i_cookie[ISAKMP_COOKIE_LENGTH];
 		uint8_t r_cookie[ISAKMP_COOKIE_LENGTH];
@@ -91,12 +88,6 @@ struct sa_block {
 		uint8_t current_iv_msgid[4];
 		uint8_t *current_iv;
 		struct lifetime life;
-		int do_dpd;
-		int dpd_idle;
-		uint32_t dpd_seqno;
-		uint32_t dpd_seqno_ack;
-		time_t dpd_sent;
-		unsigned int dpd_attempts;
 	} ike;
 	uint8_t our_address[4], our_netmask[4];
 	struct {

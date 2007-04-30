@@ -219,11 +219,6 @@ static const char *config_def_pfs(void)
 	return "server";
 }
 
-static const char *config_def_local_addr(void)
-{
-	return "0.0.0.0";
-}
-
 static const char *config_def_local_port(void)
 {
 	return "500";
@@ -242,11 +237,6 @@ static const char *config_def_natt_mode(void)
 static const char *config_def_udp_port(void)
 {
 	return "10000";
-}
-
-static const char *config_def_dpd_idle(void)
-{
-	return "300";
 }
 
 static const char *config_def_app_version(void)
@@ -277,7 +267,7 @@ static const char *config_def_vendor(void)
 static const struct config_names_s {
 	enum config_enum nm;
 	const int needsArgument;
-	const int long_only;
+	const int lvl;
 	const char *option;
 	const char *name;
 	const char *type;
@@ -463,13 +453,6 @@ static const struct config_names_s {
 		"store the pid of background process in <filename>",
 		config_def_pid_file
 	}, {
-		CONFIG_LOCAL_ADDR, 1, 1,
-		"--local-addr",
-		"Local Addr ",
-		"<ip/hostname>",
-		"local IP to use for ISAKMP / ESP / ... (0.0.0.0 == automatically assign)",
-		config_def_local_addr
-	}, {
 		CONFIG_LOCAL_PORT, 1, 1,
 		"--local-port",
 		"Local Port ",
@@ -481,19 +464,11 @@ static const struct config_names_s {
 		"--udp-port",
 		"Cisco UDP Encapsulation Port ",
 		"<0-65535>",
-		"Local UDP port number to use (0 == use random port)\n"
+		"local UDP port number to use (0 == use random port)\n"
 		"This is only relevant if cisco-udp nat-traversal is used.\n"
 		"This is the _local_ port, the remote udp port is discovered automatically.\n"
 		"It is especially not the cisco-tcp port\n",
 		config_def_udp_port
-	}, {
-		CONFIG_DPD_IDLE, 1, 1,
-		"--dpd-idle",
-		"DPD idle timeout (our side) ",
-		"<0,10-86400>",
-		"Send DPD packet after not receiving anything for <idle> seconds.\n"
-		"Use 0 to disable DPD completely (both ways).\n",
-		config_def_dpd_idle
 	}, {
 		CONFIG_NON_INTERACTIVE, 0, 1,
 		"--non-inter",
@@ -593,7 +568,7 @@ static void print_desc(const char *pre, const char *text)
 		printf("%s%s\n", pre, p);
 }
 
-static void print_usage(char *argv0, int print_level)
+static void print_usage(char *argv0, int long_help)
 {
 	int c;
 
@@ -601,7 +576,7 @@ static void print_usage(char *argv0, int print_level)
 		argv0);
 	printf("Legend:\n");
 	for (c = 0; config_names[c].name != NULL; c++) {
-		if (config_names[c].long_only > print_level)
+		if (config_names[c].lvl > long_help)
 			continue;
 
 		printf("  %s %s\n"
@@ -620,7 +595,7 @@ static void print_usage(char *argv0, int print_level)
 		printf("\n");
 	}
 	
-	if (!print_level)
+	if (!long_help)
 		printf("Use --long-help to see all options\n\n");
 	
 	printf("Report bugs to vpnc@unix-ag.uni-kl.de\n");

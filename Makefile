@@ -35,9 +35,9 @@ VERSION := $(shell sh mk-version)
 RELEASE_VERSION := $(shell cat VERSION)
 
 CC=gcc
-CFLAGS := -W -Wall -O3 -Wmissing-declarations -Wwrite-strings -g $(CFLAGS)
-CPPFLAGS += -DVERSION=\"$(VERSION)\"
-LDFLAGS := -g $(shell libgcrypt-config --libs) $(LDFLAGS)
+CFLAGS += -W -Wall -O3 -Wmissing-declarations -Wwrite-strings -g
+CPPFLAGS = -DVERSION=\"$(VERSION)\"
+LDFLAGS = -g $(shell libgcrypt-config --libs)
 CFLAGS +=  $(shell libgcrypt-config --cflags)
 
 ifeq ($(shell uname -s), SunOS)
@@ -83,24 +83,22 @@ clean :
 distclean : clean
 	-rm -f vpnc-debug.c vpnc-debug.h vpnc.ps .depend
 
-install-common: all
+install : all
 	install -d $(DESTDIR)$(ETCDIR) $(DESTDIR)$(BINDIR) $(DESTDIR)$(SBINDIR) $(DESTDIR)$(MANDIR)/man8
-	if [ "`uname -s | cut -c-6`" = "CYGWIN" ]; then \
-		install vpnc-script-win $(DESTDIR)$(ETCDIR)/vpnc-script; \
-		install vpnc-script-win.js $(DESTDIR)$(ETCDIR); \
-	else \
-		install vpnc-script $(DESTDIR)$(ETCDIR); \
-	fi
+	install vpnc-script $(DESTDIR)$(ETCDIR)
 	install -m 600 vpnc.conf $(DESTDIR)$(ETCDIR)/default.conf
-	install vpnc-disconnect $(DESTDIR)$(SBINDIR)
+	install vpnc vpnc-disconnect $(DESTDIR)$(SBINDIR)
 	install pcf2vpnc $(DESTDIR)$(BINDIR)
 	install vpnc.8 $(DESTDIR)$(MANDIR)/man8
 
-install : install-common
-	install vpnc $(DESTDIR)$(SBINDIR)
-
-install-strip : install-common
+install-strip : all
+	install -d $(DESTDIR)$(ETCDIR) $(DESTDIR)$(SBINDIR) $(DESTDIR)$(MANDIR)/man8
+	install vpnc-script $(DESTDIR)$(ETCDIR)
+	install -m 600 vpnc.conf $(DESTDIR)$(ETCDIR)/default.conf
+	install pcf2vpnc $(DESTDIR)$(BINDIR)
 	install -s vpnc $(DESTDIR)$(SBINDIR)
+	install vpnc-disconnect $(DESTDIR)$(SBINDIR)
+	install vpnc.8 $(DESTDIR)$(MANDIR)/man8
 
 uninstall :
 	rm -f $(DESTDIR)$(SBINDIR)/vpnc \

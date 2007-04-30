@@ -1,5 +1,7 @@
 TODO list
 
+* --local-address
+
 * clean up scripts
   - config-support for vpnc-script
   - customizable handling of routing
@@ -15,7 +17,7 @@ TODO list
   - get a rid of remaining (non-const) global variables
 
 * implement phase1 rekeying (with or without xauth-reauthentication)
-* implement DPD, RFC 3706 Dead Peer Detection
+* implement DPD, RFC3 706 Dead Peer Detection
 * implement compression
 * try a list of gateways (backup server)
 
@@ -28,8 +30,6 @@ TODO list
   - usernames containing "@" unable to login
   - ipsec over tcp
   - nortel support?
-  - segfault if > 100 routes/acls (to large paket? read size?)
-  - amd64 somehow broken? maybe gcc bugs??
 
 * optional drop root (rekey? reconnect? vpnc-script calls?)
 * implement hybrid-auth
@@ -51,7 +51,6 @@ TODO list
 
 ----
 
-* DONE --local-address
 * DONE implement phase2 rekeying
 * DONE support rsa-SecurID token which sometimes needs 2 IDs
 * DONE add macosx support

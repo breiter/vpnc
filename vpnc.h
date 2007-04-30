@@ -25,6 +25,5 @@
 
 void process_late_ike(struct sa_block *s, uint8_t *r_packet, ssize_t r_length);
 void keepalive_ike(struct sa_block *s);
-void dpd_ike(struct sa_block *s);
 
 #endif
