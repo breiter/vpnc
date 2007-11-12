@@ -55,6 +55,11 @@
 #include "tunip.h"
 #include "supp.h"
 
+typedef enum {
+	QMM_NORMAL,
+	QMM_DHCP
+} qm_mode_t;
+
 #if defined(__CYGWIN__)
 	GCRY_THREAD_OPTION_PTHREAD_IMPL;
 #endif
@@ -136,20 +141,6 @@ const struct vid_element vid_list[] = {
 
 static uint8_t r_packet[8192];
 static ssize_t r_length;
-
-/* DHCP over IPSEC not implemented yet */
-#undef INCLUDE_DHCPOVERIPSEC
-
-#ifdef INCLUDE_DHCPOVERIPSEC
-extern int do_dhcp_discover(struct sa_block *s);
-#else
-int do_dhcp_discover(struct sa_block *s);
-
-int do_dhcp_discover(struct sa_block *s) {
-	s = s;  /* stop gcc whining about unused var */
-	return 0;
-}
-#endif
 
 void print_vid(const unsigned char *vid, uint16_t len) {
 	
@@ -2392,7 +2383,7 @@ static struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
 	return r;
 }
 
-static void setup_link(struct sa_block *s)
+static void do_quickmode(struct sa_block *s, qm_mode_t qmm)
 {
 	struct isakmp_payload *rp, *us, *ke = NULL, *them, *nonce_r = NULL;
 	struct isakmp_packet *r;
@@ -2404,6 +2395,10 @@ static void setup_link(struct sa_block *s)
 	uint8_t nonce_i[20], *dh_public = NULL;
 	int i;
 
+	if (qmm == QMM_DHCP)
+		DEBUGTOP(2, printf("S7 Quickmode for DHCP only\n"));
+	else
+		DEBUGTOP(2, printf("S7 Normal Quickmode\n"));
 	DEBUGTOP(2, printf("S7.1 QM_packet1\n"));
 	/* Set up the Diffie-Hellman stuff.  */
 	if (get_dh_group_ipsec(s->ipsec.do_pfs)->my_id) {
@@ -2420,15 +2415,24 @@ static void setup_link(struct sa_block *s)
 	rp->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_NONCE, nonce_i, sizeof(nonce_i));
 
 	us = new_isakmp_payload(ISAKMP_PAYLOAD_ID);
-	us->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR;
-	us->u.id.length = 4;
-	us->u.id.data = xallocc(4);
-	memcpy(us->u.id.data, s->our_address, sizeof(struct in_addr));
-	them = new_isakmp_payload(ISAKMP_PAYLOAD_ID);
-	them->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR_SUBNET;
-	them->u.id.length = 8;
-	them->u.id.data = xallocc(8);
-	memset(them->u.id.data, 0, 8);
+	if (qmm == QMM_NORMAL) {
+		us->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR;
+		us->u.id.length = 4;
+		us->u.id.data = xallocc(4);
+		memcpy(us->u.id.data, s->our_address, sizeof(struct in_addr));
+		them = new_isakmp_payload(ISAKMP_PAYLOAD_ID);
+		them->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR_SUBNET;
+		them->u.id.length = 8;
+		them->u.id.data = xallocc(8);
+		memset(them->u.id.data, 0, 8);
+	} else if (qmm == QMM_DHCP) {
+		/* FIXME: do the right thing here: From rfc3456:
+   		 *	The remote host SHOULD  use an IDci payload of
+		 *	0.0.0.0/UDP/port 68 in the quick mode exchange. 
+		 */
+	} else {
+		error(1, 0, "Unknown quickmode function");
+	}
 	us->next = them;
 	s->ipsec.life.start = time(NULL);
 
@@ -2727,9 +2731,15 @@ static void setup_link(struct sa_block *s)
 		}
 		
 		s->ipsec.rx.seq_id = s->ipsec.tx.seq_id = 1;
-		DEBUGTOP(2, printf("S7.9 main loop (receive and transmit ipsec packets)\n"));
-		vpnc_doit(s);
 	}
+}
+
+static void setup_link(struct sa_block *s)
+{
+
+	do_quickmode(s, QMM_NORMAL);
+	DEBUGTOP(2, printf("S7.9 main loop (receive and transmit ipsec packets)\n"));
+	vpnc_doit(s);
 	
 	DEBUGTOP(2, printf("S7.10 send termination message\n"));
 	/* finished, send the delete message */
@@ -3059,6 +3069,15 @@ void process_late_ike(struct sa_block *s, uint8_t *r_packet, ssize_t r_length)
 	}
 	
 	return;
+}
+
+static int do_dhcp_discover(struct sa_block *s) {
+	return 0;
+	do_quickmode(s, QMM_DHCP);
+	setenv("reason", "dhcp", 1);
+	system(config[CONFIG_SCRIPT]);
+	/* FIXME: tear down dhcp sa again */
+	return 0;
 }
 
 int main(int argc, char **argv)

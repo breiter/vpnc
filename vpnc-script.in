@@ -414,6 +414,15 @@ do_pre_init() {
 	fi
 }
 
+do_dhcp() {
+	### FIXME: This is just an outline and by no means ready to work.
+	###        dhcpclient is a dummy for a dhcpclient that can run on
+	###        tun interfaces - I don't know whether that's a problem
+	###        and if it is, whether any existing client can handle that.
+	ifconfig $TUNDEV up
+	dhcpclient $TUNDEV
+}
+
 do_connect() {
 	if [ -n "$CISCO_BANNER" ]; then
 		echo "Connect Banner:"
@@ -489,6 +498,9 @@ fi
 case "$reason" in
 	pre-init)
 		do_pre_init
+		;;
+	dhcp)
+		do_dhcp
 		;;
 	connect)
 		do_connect
