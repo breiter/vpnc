@@ -191,6 +191,11 @@ static const char *config_def_internal_addr(void)
 	return "(not set)";
 }
 
+static const char *config_def_target_network(void)
+{
+	return "0.0.0.0/0.0.0.0";
+}
+
 static const struct config_names_s {
 	enum config_enum nm;
 	const int needsArgument;
@@ -449,6 +454,13 @@ static const struct config_names_s {
 		" * if parameter is set: use static IP address for tunnel\n"
 		" * if not set:          get dynamic IP address via DHCP over IPSEC (not implemented yet)\n",
 		config_def_internal_addr
+	}, {
+		CONFIG_TARGET_NETWORK, 1, 1,
+		"--target-network",
+		"Target network ",
+		"<target network/netmask>",
+		"Target network in dotted decimal or CIDR notation (sonicwall only)\n",
+		config_def_target_network
 	}, {
 		0, 0, 0, NULL, NULL, NULL, NULL, NULL
 	}

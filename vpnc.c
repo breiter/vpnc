@@ -238,6 +238,26 @@ static void init_sockaddr(struct in_addr *dst, const char *hostname)
 	}
 }
 
+static void init_netaddr(struct in_addr *net, const char *string)
+{
+	char *p;
+
+	if ((p = strchr(string, '/')) != NULL) {
+		char *host = xallocc(p - string + 1);
+		memcpy(host, string, p - string + 1);
+		host[p - string] = '\0';
+		init_sockaddr((struct in_addr *)net, host);
+		free(host);
+		if (strchr(p + 1, '.') != NULL)
+			init_sockaddr(net + 1, p + 1);
+		else {
+			int bits = atoi(p + 1);
+			unsigned long mask = (1 << bits) - 1;
+			memcpy((char *)(net + 1), (char *)&mask, 4);
+		}
+	}
+}
+
 static void setup_tunnel(struct sa_block *s)
 {
 	setenv("reason", "pre-init", 1);
@@ -2425,6 +2445,8 @@ static void do_quickmode(struct sa_block *s, qm_mode_t qmm)
 		them->u.id.length = 8;
 		them->u.id.data = xallocc(8);
 		memset(them->u.id.data, 0, 8);
+		if (opt_vendor == VENDOR_SONICWALL)
+			init_netaddr((struct in_addr *)them->u.id.data, config[CONFIG_TARGET_NETWORK]);
 	} else if (qmm == QMM_DHCP) {
 		/* FIXME: do the right thing here: From rfc3456:
    		 *	The remote host SHOULD  use an IDci payload of
