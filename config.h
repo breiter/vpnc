@@ -57,6 +57,7 @@ enum config_enum {
 	CONFIG_AUTH_MODE,
 	CONFIG_CA_FILE,
 	CONFIG_CA_DIR,
+	CONFIG_INTERNAL_ADDR,
 	LAST_CONFIG
 };
 
@@ -68,7 +69,8 @@ enum hex_dump_enum {
 
 enum vendor_enum {
 	VENDOR_CISCO,
-	VENDOR_NETSCREEN
+	VENDOR_NETSCREEN,
+	VENDOR_SONICWALL
 };
 
 enum natt_mode_enum {

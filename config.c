@@ -186,6 +186,11 @@ static const char *config_def_vendor(void)
 	return "cisco";
 }
 
+static const char *config_def_internal_addr(void)
+{
+	return "(not set)";
+}
+
 static const struct config_names_s {
 	enum config_enum nm;
 	const int needsArgument;
@@ -267,7 +272,7 @@ static const struct config_names_s {
 		CONFIG_VENDOR, 1, 1,
 		"--vendor",
 		"Vendor ",
-		"<cisco/netscreen>",
+		"<cisco/netscreen/sonicwall>",
 		"vendor of your IPSec gateway",
 		config_def_vendor
 	}, {
@@ -435,6 +440,15 @@ static const struct config_names_s {
 		"<directory>",
 		"path of the trusted CA-Directory",
 		config_ca_dir
+	}, {
+		CONFIG_INTERNAL_ADDR, 1, 1,
+		"--internal",
+		"Internal IP ",
+		"<ip/hostname>",
+		"IP address on our side (sonicwall only):\n"
+		" * if parameter is set: use static IP address for tunnel\n"
+		" * if not set:          get dynamic IP address via DHCP over IPSEC (not implemented yet)\n",
+		config_def_internal_addr
 	}, {
 		0, 0, 0, NULL, NULL, NULL, NULL, NULL
 	}
@@ -723,8 +737,10 @@ void do_config(int argc, char **argv)
 			opt_vendor = VENDOR_CISCO;
 		} else if (!strcmp(config[CONFIG_VENDOR], "netscreen")) {
 			opt_vendor = VENDOR_NETSCREEN;
+		} else if (!strcmp(config[CONFIG_VENDOR], "sonicwall")) {
+			opt_vendor = VENDOR_SONICWALL;
 		} else {
-			printf("%s: unknown vendor %s\nknown vendors: cisco netscreen\n", argv[0], config[CONFIG_VENDOR]);
+			printf("%s: unknown vendor %s\nknown vendors: cisco netscreen sonicwall\n", argv[0], config[CONFIG_VENDOR]);
 			exit(1);
 		}
 	}

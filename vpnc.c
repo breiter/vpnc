@@ -137,6 +137,20 @@ const struct vid_element vid_list[] = {
 static uint8_t r_packet[8192];
 static ssize_t r_length;
 
+/* DHCP over IPSEC not implemented yet */
+#undef INCLUDE_DHCPOVERIPSEC
+
+#ifdef INCLUDE_DHCPOVERIPSEC
+extern int do_dhcp_discover(struct sa_block *s);
+#else
+int do_dhcp_discover(struct sa_block *s);
+
+int do_dhcp_discover(struct sa_block *s) {
+	s = s;  /* stop gcc whining about unused var */
+	return 0;
+}
+#endif
+
 void print_vid(const unsigned char *vid, uint16_t len) {
 	
 	int vid_index = 0;
@@ -1124,6 +1138,8 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 		l = l->next;
 		if (opt_vendor == VENDOR_CISCO)
 			l->u.id.type = ISAKMP_IPSEC_ID_KEY_ID;
+		else if (opt_vendor == VENDOR_SONICWALL)
+			l->u.id.type = ISAKMP_IPSEC_ID_FQDN;
 		else
 			l->u.id.type = ISAKMP_IPSEC_ID_USER_FQDN;
 		l->u.id.protocol = IPPROTO_UDP;
@@ -3088,9 +3104,33 @@ int main(int argc, char **argv)
 		if (s->ike.auth_algo >= IKE_AUTH_HybridInitRSA)
 			do_load_balance = do_phase2_xauth(s);
 		DEBUGTOP(2, printf("S6 do_phase2_config\n"));
-		if ((opt_vendor != VENDOR_NETSCREEN) && (do_load_balance == 0))
+		if ((opt_vendor == VENDOR_CISCO) && (do_load_balance == 0))
 			do_load_balance = do_phase2_config(s);
 	} while (do_load_balance);
+
+	/* 2007-09-11 JKU/ZID: no ISAKMP_MODECFG for sonicwall.
+	 *                     either set static IP given via config or try getting IP-address via DHCP over IPSEC  
+	 */
+	if (opt_vendor == VENDOR_SONICWALL) {
+		/* CONFIG_INTERNAL_ADDR is empty or starting with '(': try getting dynamical IP address */
+		if (strlen(config[CONFIG_INTERNAL_ADDR]) <= 0 || config[CONFIG_INTERNAL_ADDR][0] == '(' ) {
+			int rc = do_dhcp_discover(s);
+
+			if (rc <= 0) {
+				DEBUG(0, printf("\n"));
+				DEBUG(0, printf("cannot get dynamical IP (DHCP over IPSEC is not implemented yet)\n"));
+				DEBUG(0, printf("setting tunnel IP to local IP address %s\n", inet_ntoa(s->src)));
+				DEBUG(0, printf("try forcing a static IP for the tunnel to avoid this\n"));
+				DEBUG(0, printf("(see --long-help, option 'internal')\n"));
+				DEBUG(0, printf("\n"));
+				memcpy(s->our_address, &s->src, 4);
+			}
+		} else {
+			init_sockaddr((struct in_addr *)s->our_address, config[CONFIG_INTERNAL_ADDR]);
+		}
+		addenv_ipv4("INTERNAL_IP4_ADDRESS", s->our_address);
+	}
+
 	DEBUGTOP(2, printf("S7 setup_link (phase 2 + main_loop)\n"));
 	setup_link(s);
 	DEBUGTOP(2, printf("S8 close_tunnel\n"));
