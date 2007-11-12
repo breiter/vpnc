@@ -415,12 +415,16 @@ do_pre_init() {
 }
 
 do_dhcp() {
-	### FIXME: This is just an outline and by no means ready to work.
-	###        dhcpclient is a dummy for a dhcpclient that can run on
-	###        tun interfaces - I don't know whether that's a problem
-	###        and if it is, whether any existing client can handle that.
-	ifconfig $TUNDEV up
-	dhcpclient $TUNDEV
+	### FIXME: This solution has been created to work on Linux using
+	###        a current version of dhcpclient from
+	###        http://www.flamewarmaster.de/software/dhcpclient/
+	###        It will not work on other platforms.
+	ifconfig $TUNDEV inet 0.0.0.0 up
+	dhcpclient -A 0 -a 0 -C $CHADDR $TUNDEV &
+	until `ifconfig $TUNDEV|grep 'inet addr' >/dev/null 2>&1` ; do
+		sleep 2;
+		echo "Waiting for ip-address"
+	done
 }
 
 do_connect() {
