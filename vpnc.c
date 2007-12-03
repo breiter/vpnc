@@ -2446,16 +2446,21 @@ static void do_quickmode(struct sa_block *s, qm_mode_t qmm)
 		them->u.id.data = xallocc(8);
 		memset(them->u.id.data, 0, 8);
 		if (opt_vendor == VENDOR_SONICWALL)
-			init_netaddr((struct in_addr *)them->u.id.data, config[CONFIG_TARGET_NETWORK]);
+			init_netaddr((struct in_addr *)them->u.id.data,
+					config[CONFIG_TARGET_NETWORK]);
+		us->next = them;
 	} else if (qmm == QMM_DHCP) {
-		/* FIXME: do the right thing here: From rfc3456:
-   		 *	The remote host SHOULD  use an IDci payload of
-		 *	0.0.0.0/UDP/port 68 in the quick mode exchange. 
-		 */
+		/* rfc3456: The remote host SHOULD  use an IDci payload of
+		 *    0.0.0.0/UDP/port 68 in the quick mode exchange. */
+		us->u.id.protocol = IPPROTO_UDP;
+		us->u.id.port = 68;
+		us->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR;
+		us->u.id.length = 4;
+		us->u.id.data = xallocc(4);
+		memset(us->u.id.data, 0, 4);
 	} else {
 		error(1, 0, "Unknown quickmode function");
 	}
-	us->next = them;
 	s->ipsec.life.start = time(NULL);
 
 	if (!dh_grp) {
