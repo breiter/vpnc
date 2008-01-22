@@ -1,0 +1,44 @@
+[vpnc-devel] vpnc with Nortel Contivity
+
+Matt Chapman <matthewc@cse.unsw.edu.au>
+Thu Jun 9 21:51:50 CEST 2005
+
+
+I've managed to get vpnc working with a Nortel Contivity VPN
+concentrator.
+
+Basically the differences are:
+
+* The group name and password are pre-transformed:
+  key_id = SHA1(group_name)
+  shared_key = HMAC_SHA1(group_name, SHA1(group_password))
+
+* The XAUTH implementation follows
+  draft-ietf-ipsec-isakmp-xauth-02.txt (whereas CISCO uses a
+  later version).  Specifically:
+  - the encoding of the proposal is not defined in that spec,
+    and Nortel does it differently
+  - the XAUTH attributes have different numerical values
+    (which overlap with Mode-Config, argh)
+  - success/failure are encoded as Mode-Config message types
+    5/6 (or sometimes as an ISAKMP notify?) rather than in
+    an attribute
+  - the concentrator always sends 0 in XAUTH_TYPE and the
+    client may have to return a different value (xauth-02 is
+    not clear on whether this is allowed, it is not
+    clarified until xauth-05).  In my case I'm using an
+    ActivCard token for which I have to specify 5 (SecurID).
+
+* Mode-Config is done as a push, i.e. the server sends SET,
+  instead of a pull.
+
+* The concentrator wants to be the initiator in phase 2
+  quick mode, so we have to support being a responder.
+
+Thus the changes are fairly intrusive - phase 1 is common
+but XAUTH/Mode-Config/phase 2 diverge.
+
+If people are interested, I can clean up what I've done
+and send patches.
+
+Matt
