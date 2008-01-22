@@ -1393,6 +1393,7 @@ static int do_phase_2_xauth(struct sa_block *s)
 	/* This can go around for a while.  */
 	for (loopcount = 0;; loopcount++) {
 		int reject;
+		uint16_t xauth_type_requested = 5;
 		struct isakmp_payload *rp;
 		struct isakmp_attribute *a, *ap, *reply_attr;
 		char ntop_buf[32];
@@ -1443,8 +1444,9 @@ static int do_phase_2_xauth(struct sa_block *s)
 		for (ap = a; ap && reject == 0; ap = ap->next)
 			switch (ap->type) {
 			case ISAKMP_XAUTH_ATTRIB_TYPE:
-				if (ap->af != isakmp_attr_16 || ap->u.attr_16 != 0)
+				if (ap->af != isakmp_attr_16 || !(ap->u.attr_16 == 0 || ap->u.attr_16 == 5))
 					reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
+                                xauth_type_requested = ap->u.attr_16;
 				break;
 			case ISAKMP_XAUTH_ATTRIB_USER_NAME:
 			case ISAKMP_XAUTH_ATTRIB_USER_PASSWORD:
@@ -1541,7 +1543,7 @@ static int do_phase_2_xauth(struct sa_block *s)
 				;
 			}
 
-		reply_attr = new_isakmp_attribute_16(ISAKMP_XAUTH_ATTRIB_TYPE, 5, reply_attr);
+		reply_attr = new_isakmp_attribute_16(ISAKMP_XAUTH_ATTRIB_TYPE, xauth_type_requested, reply_attr);
 
 		/* Send the response.  */
 		rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
