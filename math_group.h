@@ -35,8 +35,10 @@
 #ifndef __MATH_GROUP_H__
 #define __MATH_GROUP_H__
 
+#include <gcrypt.h>
+
 enum groups {
-	MODP, /* F_p, Z modulo a prime */
+	MODP  /* F_p, Z modulo a prime */
 };
 
 #define OAKLEY_GRP_1	1
@@ -47,11 +49,27 @@ enum groups {
  * The group on which diffie hellmann calculations are done.
  */
 
+/* Description of F_p for Boot-Strapping */
+
+struct modp_dscr {
+	int id;
+	int bits; /* Key Bits provided by this group */
+	const char *prime; /* Prime */
+	const char *gen; /* Generator */
+};
+
+struct modp_group {
+	gcry_mpi_t gen; /* Generator */
+	gcry_mpi_t p; /* Prime */
+	gcry_mpi_t a, b, c, d;
+};
+
 struct group {
 	enum groups type;
 	int id; /* Group ID */
 	int bits; /* Number of key bits provided by this group */
-	void *group;
+	struct modp_group *group;
+	const struct modp_dscr *group_dscr;
 	void *a, *b, *c, *d;
 	void *gen; /* Group Generator */
 	int (*getlen) (struct group *);
@@ -61,23 +79,10 @@ struct group {
 	int (*operation) (struct group *, void *, void *, void *);
 };
 
-/* Description of F_p for Boot-Strapping */
-
-struct modp_dscr {
-	int id;
-	int bits; /* Key Bits provided by this group */
-	char *prime; /* Prime */
-	char *gen; /* Generator */
-};
-
 /* Prototypes */
 
 void group_init(void);
 void group_free(struct group *);
 struct group *group_get(int);
-
-void modp_free(struct group *);
-struct group *modp_clone(struct group *, struct group *);
-void modp_init(struct group *);
 
 #endif /* _MATH_GROUP_H_ */

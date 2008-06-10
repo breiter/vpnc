@@ -43,17 +43,15 @@
 #include "math_group.h"
 
 /* We do not want to export these definitions.  */
-int modp_getlen(struct group *);
-void modp_getraw(struct group *, gcry_mpi_t, unsigned char *);
-int modp_setraw(struct group *, gcry_mpi_t, unsigned char *, int);
-int modp_setrandom(struct group *, gcry_mpi_t);
-int modp_operation(struct group *, gcry_mpi_t, gcry_mpi_t, gcry_mpi_t);
+static void modp_free(struct group *);
+static struct group *modp_clone(struct group *, struct group *);
+static void modp_init(struct group *);
 
-struct modp_group {
-	gcry_mpi_t gen; /* Generator */
-	gcry_mpi_t p; /* Prime */
-	gcry_mpi_t a, b, c, d;
-};
+static int modp_getlen(struct group *);
+static void modp_getraw(struct group *, gcry_mpi_t, unsigned char *);
+static int modp_setraw(struct group *, gcry_mpi_t, unsigned char *, int);
+static int modp_setrandom(struct group *, gcry_mpi_t);
+static int modp_operation(struct group *, gcry_mpi_t, gcry_mpi_t, gcry_mpi_t);
 
 /*
  * This module provides access to the operations on the specified group
@@ -68,7 +66,7 @@ struct modp_group {
  * group order, e.g. q = 2**768.
  */
 
-struct modp_dscr oakley_modp[] = {
+static const struct modp_dscr oakley_modp[] = {
 	{
 		OAKLEY_GRP_1, 72, /* This group is insecure, only sufficient for DES */
 		"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
@@ -102,9 +100,9 @@ struct modp_dscr oakley_modp[] = {
 };
 
 /* XXX I want to get rid of the casting here.  */
-struct group groups[] = {
+static struct group groups[] = {
 	{
-		MODP, OAKLEY_GRP_1, 0, &oakley_modp[0], 0, 0, 0, 0, 0,
+		MODP, OAKLEY_GRP_1, 0, NULL, &oakley_modp[0], NULL, NULL, NULL, NULL, NULL,
 		(int (*)(struct group *))modp_getlen,
 		(void (*)(struct group *, void *, unsigned char *))modp_getraw,
 		(int (*)(struct group *, void *, unsigned char *, int))modp_setraw,
@@ -112,7 +110,7 @@ struct group groups[] = {
 		(int (*)(struct group *, void *, void *, void *))modp_operation
 	},
 	{
-		MODP, OAKLEY_GRP_2, 0, &oakley_modp[1], 0, 0, 0, 0, 0,
+		MODP, OAKLEY_GRP_2, 0, NULL, &oakley_modp[1], NULL, NULL, NULL, NULL, NULL,
 		(int (*)(struct group *))modp_getlen,
 		(void (*)(struct group *, void *, unsigned char *))modp_getraw,
 		(int (*)(struct group *, void *, unsigned char *, int))modp_setraw,
@@ -120,7 +118,7 @@ struct group groups[] = {
 		(int (*)(struct group *, void *, void *, void *))modp_operation
 	},
 	{
-		MODP, OAKLEY_GRP_5, 0, &oakley_modp[2], 0, 0, 0, 0, 0,
+		MODP, OAKLEY_GRP_5, 0, NULL, &oakley_modp[2], NULL, NULL, NULL, NULL, NULL,
 		(int (*)(struct group *))modp_getlen,
 		(void (*)(struct group *, void *, unsigned char *))modp_getraw,
 		(int (*)(struct group *, void *, unsigned char *, int))modp_setraw,
@@ -168,7 +166,7 @@ void group_free(struct group *grp)
 	free(grp);
 }
 
-struct group *modp_clone(struct group *new, struct group *clone)
+static struct group *modp_clone(struct group *new, struct group *clone)
 {
 	struct modp_group *new_grp, *clone_grp = clone->group;
 
@@ -193,7 +191,7 @@ struct group *modp_clone(struct group *new, struct group *clone)
 	return new;
 }
 
-void modp_free(struct group *old)
+static void modp_free(struct group *old)
 {
 	struct modp_group *grp = old->group;
 
@@ -206,9 +204,9 @@ void modp_free(struct group *old)
 	free(grp);
 }
 
-void modp_init(struct group *group)
+static void modp_init(struct group *group)
 {
-	struct modp_dscr *dscr = (struct modp_dscr *)group->group;
+	const struct modp_dscr *dscr = group->group_dscr;
 	struct modp_group *grp;
 
 	grp = malloc(sizeof *grp);
@@ -216,8 +214,8 @@ void modp_init(struct group *group)
 
 	group->bits = dscr->bits;
 
-	gcry_mpi_scan(&grp->p, GCRYMPI_FMT_HEX, dscr->prime, 0, NULL);
-	gcry_mpi_scan(&grp->gen, GCRYMPI_FMT_HEX, dscr->gen, 0, NULL);
+	gcry_mpi_scan(&grp->p, GCRYMPI_FMT_HEX, (const unsigned char*)dscr->prime, 0, NULL);
+	gcry_mpi_scan(&grp->gen, GCRYMPI_FMT_HEX, (const unsigned char *)dscr->gen, 0, NULL);
 
 	grp->a = gcry_mpi_new(group->bits);
 	grp->b = gcry_mpi_new(group->bits);
@@ -231,14 +229,14 @@ void modp_init(struct group *group)
 	group->group = grp;
 }
 
-int modp_getlen(struct group *group)
+static int modp_getlen(struct group *group)
 {
 	struct modp_group *grp = (struct modp_group *)group->group;
 
 	return (gcry_mpi_get_nbits(grp->p) + 7) / 8;
 }
 
-void modp_getraw(struct group *grp, gcry_mpi_t v, unsigned char *d)
+static void modp_getraw(struct group *grp, gcry_mpi_t v, unsigned char *d)
 {
 	size_t l, l2;
 	unsigned char *tmp;
@@ -258,11 +256,11 @@ void modp_getraw(struct group *grp, gcry_mpi_t v, unsigned char *d)
 #endif
 }
 
-int modp_setraw(struct group *grp, gcry_mpi_t d, unsigned char *s, int l)
+static int modp_setraw(struct group *grp, gcry_mpi_t d, unsigned char *s, int l)
 {
 	int i;
 
-	grp = 0; /* unused */
+	grp = NULL; /* unused */
 
 	gcry_mpi_set_ui(d, 0);
 	for (i = 0; i < l; i++) {
@@ -280,7 +278,7 @@ int modp_setraw(struct group *grp, gcry_mpi_t d, unsigned char *s, int l)
 	return 0;
 }
 
-int modp_setrandom(struct group *grp, gcry_mpi_t d)
+static int modp_setrandom(struct group *grp, gcry_mpi_t d)
 {
 	int i, l = grp->getlen(grp);
 	uint32_t tmp = 0;
@@ -289,7 +287,7 @@ int modp_setrandom(struct group *grp, gcry_mpi_t d)
 
 	for (i = 0; i < l; i++) {
 		if (i % 4)
-			gcry_randomize((unsigned char *)&tmp, sizeof(tmp), GCRY_WEAK_RANDOM);
+			gcry_randomize((unsigned char *)&tmp, sizeof(tmp), GCRY_STRONG_RANDOM);
 
 		gcry_mpi_mul_2exp(d, d, 8);
 		gcry_mpi_add_ui(d, d, tmp & 0xFF);
@@ -298,7 +296,7 @@ int modp_setrandom(struct group *grp, gcry_mpi_t d)
 	return 0;
 }
 
-int modp_operation(struct group *group, gcry_mpi_t d, gcry_mpi_t a, gcry_mpi_t e)
+static int modp_operation(struct group *group, gcry_mpi_t d, gcry_mpi_t a, gcry_mpi_t e)
 {
 	struct modp_group *grp = (struct modp_group *)group->group;
 

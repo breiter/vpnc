@@ -1,5 +1,6 @@
 /* ISAKMP packing and unpacking routines.
    Copyright (C) 2002  Geoffrey Keating
+   Copyright (C) 2003-2005 Maurice Massar
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,6 +15,8 @@
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+   $Id$
 */
 
 #ifndef __ISAKMP_PKT_H__
@@ -31,7 +34,8 @@ struct isakmp_attribute {
 	enum {
 		isakmp_attr_lots,
 		isakmp_attr_16,
-		isakmp_attr_2x8
+		isakmp_attr_2x8,
+		isakmp_attr_acl
 	} af;
 	union {
 		uint16_t attr_16;
@@ -40,6 +44,13 @@ struct isakmp_attribute {
 			uint16_t length;
 			uint8_t *data;
 		} lots;
+		struct {
+			uint16_t count;
+			struct acl_ent_s {
+				struct in_addr addr, mask;
+				uint16_t protocol, sport, dport;
+			} *acl_ent;
+		} acl;
 	} u;
 };
 
@@ -88,6 +99,7 @@ struct isakmp_payload {
 			uint16_t type;
 			uint16_t data_length;
 			uint8_t *data;
+			struct isakmp_attribute *attributes; /* sometimes, data is an attributes array */
 		} n;
 		struct {
 			uint32_t doi;
@@ -98,7 +110,9 @@ struct isakmp_payload {
 		} d;
 		struct {
 			uint8_t type;
+#ifdef NORTELVPN
 			uint8_t pad;
+#endif
 			uint16_t id;
 			struct isakmp_attribute *attributes;
 		} modecfg;
@@ -122,7 +136,7 @@ extern struct isakmp_payload *new_isakmp_payload(uint8_t);
 extern struct isakmp_payload *new_isakmp_data_payload(uint8_t type, const void *data,
 	size_t data_length);
 extern struct isakmp_payload *dup_isakmp_payload(struct isakmp_payload *p);
-extern void free_isakmp_payload(struct isakmp_payload *p);
+//extern void free_isakmp_payload(struct isakmp_payload *p);
 extern struct isakmp_attribute *new_isakmp_attribute(uint16_t, struct isakmp_attribute *);
 extern struct isakmp_attribute *new_isakmp_attribute_16(uint16_t type, uint16_t data,
 	struct isakmp_attribute *next);
@@ -134,7 +148,6 @@ extern void flatten_isakmp_packet(struct isakmp_packet *p,
 	uint8_t ** result, size_t * size, size_t blksz);
 extern struct isakmp_packet *parse_isakmp_packet(const uint8_t * data,
 	size_t data_len, int * reject);
-extern const char *isakmp_notify_to_error(uint16_t notify);
 extern void test_pack_unpack(void);
 
 #endif

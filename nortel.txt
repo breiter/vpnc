@@ -42,3 +42,48 @@ If people are interested, I can clean up what I've done
 and send patches.
 
 Matt
+----------------
+I've tried to connect to my corporate VPN, but the only message I got was:
+
+vpnc: xauth packet unsupported: ATTRIBUTES_NOT_SUPPORTED
+
+Problem was found in xauth_type. In my case request attribute "xauth_type" consisted 5 as value. There is quick 
+fix for this issue below. But...
+
+In the chapter 6.2 of the draft-beaulieu-ike-xauth-02.txt we can read:
+
+"XAUTH-TYPE - The type of extended authentication requested whose
+   values are described in the next section.  This is an optional
+   attribute for the ISAKMP_CFG_REQUEST and ISAKMP_CFG_REPLY messages.
+   If the XAUTH-TYPE is not present, then it is assumed to be Generic.
+   The XAUTH-TYPE in a REPLY MUST be identical to the XAUTH-TYPE in the
+   REQUEST."
+
+So I think the better way is to send reply with the same xauth_type value as in request. But I can't test it 
+because our server always use 5 and never 0.
+
+Thanks.
+----
+Volodymyr Buell
+
+------------ This ended up in the folowin patch
+        if (ap->af != isakmp_attr_16 || !(ap->u.attr_16 == 0 || ap->u.attr_16 == 5))
+          reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
+                xauth_type_requested = ap->u.attr_16;
+----------------------
+
+This patch didn't work in my NortelVPN setup I mad a buildflag of until a proper fix can be made
+so please set NORTELVPN_XAUTHTYPE_AS_REQUEST flag to vpnc.c to get this
+
+#ifdef NORTELVPN_XAUTHTYPE_AS_REQUEST
+        if (ap->af != isakmp_attr_16 || !(ap->u.attr_16 == 0 || ap->u.attr_16 == 5))
+          reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
+                xauth_type_requested = ap->u.attr_16;
+#else
+
+        if (ap->af != isakmp_attr_16 || ap->u.attr_16 != 0)
+          reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
+#endif
+
+
+/Zingo Andersen

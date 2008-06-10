@@ -1,8 +1,11 @@
 /* IPSec ESP and AH support.
    Copyright (c) 1999      Pierre Beyssac
    Copyright (C) 2002      Geoffrey Keating
-   Copyright (C) 2003-2004 Maurice Massar
+   Copyright (C) 2003-2007 Maurice Massar
    Copyright (C) 2004      Tomas Mraz
+   Copyright (C) 2005      Michael Tilstra
+   Copyright (C) 2006      Daniel Roethlisberger
+   Copyright (C) 2007      Paolo Zarpellon (tap+Cygwin support)
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -17,6 +20,8 @@
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+   $Id$
 */
 
 /* borrowed from pipsecd (-; */
@@ -58,16 +63,23 @@
 #include <netinet/in_systm.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#ifndef __SKYOS__
 #include <netinet/ip_icmp.h>
+#endif
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <syslog.h>
 #include <time.h>
-#include <poll.h>
+#include <sys/select.h>
 #include <signal.h>
 
-#ifndef __sun__
+#ifdef __CYGWIN__
+#include <pthread.h>
+#endif
+
+#if !defined(__sun__) && !defined(__SKYOS__)
 #include <err.h>
 #endif
 
@@ -76,115 +88,46 @@
 #include "config.h"
 #include "vpnc.h"
 
-#define max(a,b)	((a)>(b)?(a):(b))
+#include "tunip.h"
 
-struct sa_desc {
-	struct sa_desc *next;
+#ifndef MAX
+#define MAX(a,b)	((a)>(b)?(a):(b))
+#endif
 
-	struct sockaddr_in init; /* initial and fallback remote address */
-	struct sockaddr_in dest; /* current remote address */
-	struct sockaddr_in source; /* local socket address we send packets from */
-	unsigned char use_fallback; /* use initial address as fallback? */
-	unsigned char use_dest; /* is dest address known yet? */
-
-	unsigned long spi; /* security parameters index */
-	unsigned long seq_id; /* for replay protection (not implemented) */
-
-	/* Encryption key */
-	const unsigned char *enc_secret;
-	size_t enc_secret_size;
-	size_t ivlen;
-	/* Preprocessed encryption key */
-	gcry_cipher_hd_t cry_ctx;
-	int cry_algo;
-
-	/* Authentication secret */
-	const unsigned char *auth_secret;
-	unsigned int auth_secret_size;
-	/* Authentication method to use, or NULL */
-	int md_algo;
-
-	/* Encapsulation method to use to send packets */
-	struct encap_method *em;
-
-	/* timeout counters */
-	time_t last_packet_sent, last_packet_recv, last_checkifaddr;
-};
-
-struct peer_desc {
-	struct sa_desc *local_sa, *remote_sa;
-	int tun_fd; /* file descriptor for associated tunnel device */
-};
+#ifndef FD_COPY
+#define FD_COPY(f, t)	((void)memcpy((t), (f), sizeof(*(f))))
+#endif
 
 /* A real ESP header (RFC 2406) */
 typedef struct esp_encap_header {
-	unsigned long spi; /* security parameters index */
-	unsigned long seq_id; /* sequence id (unimplemented) */
+	uint32_t spi; /* security parameters index */
+	uint32_t seq_id; /* sequence id (unimplemented) */
 	/* variable-length payload data + padding */
 	/* unsigned char next_header */
 	/* optional auth data */
-} esp_encap_header_t;
+} __attribute__((packed)) esp_encap_header_t;
 
 struct encap_method {
-	int fd; /* file descriptor for relevant socket */
-	unsigned char *name;
-
 	int fixed_header_size;
-
-	/* Description of the packet being processed */
-	unsigned char *buf;
-	unsigned int bufsize, bufpayload, var_header_size;
-	int buflen;
-	struct sockaddr_in from;
-	int fromlen;
-
-	int (*recv) (struct encap_method * encap,
-		unsigned char *buf, unsigned int bufsize, struct sockaddr_in * from);
-	struct peer_desc *(*peer_find) (struct encap_method * encap);
-	void (*send_peer) (struct encap_method * encap,
-		struct peer_desc * peer, unsigned char *buf, unsigned int bufsize);
-	int (*recv_peer) (struct encap_method * encap, struct peer_desc * peer);
+	
+	int  (*recv)      (struct sa_block *s, unsigned char *buf, unsigned int bufsize);
+	void (*send_peer) (struct sa_block *s, unsigned char *buf, unsigned int bufsize);
+	int  (*recv_peer) (struct sa_block *s);
 };
-
-/* Forward decl */
-void encap_esp_send_peer(struct encap_method *encap,
-	struct peer_desc *peer, unsigned char *buf, unsigned int bufsize);
-void encap_udp_send_peer(struct encap_method *encap,
-	struct peer_desc *peer, unsigned char *buf, unsigned int bufsize);
-struct peer_desc *peer_find(unsigned long spi, struct encap_method *encap);
-int encap_esp_recv_peer(struct encap_method *encap, struct peer_desc *peer);
 
 /* Yuck! Global variables... */
 
-#define MAX_HEADER 64
+#define MAX_HEADER 72
 #define MAX_PACKET 4096
-unsigned char buf[MAX_HEADER + MAX_PACKET];
-
-struct peer_desc vpnpeer;
-
-unsigned short ip_id;
-
-/* Security associations lists */
-struct sa_desc *local_sa_list = NULL;
-struct sa_desc *remote_sa_list = NULL;
-
-#define encap_get_fd(e)	((e)->fd)
-#define encap_recv(e,b,bs,f) \
-	((e)->recv((e),(b),(bs),(f)))
-#define encap_peer_find(e) \
-	((e)->peer_find((e)))
-#define encap_send_peer(e,p,b,bs) \
-	((e)->send_peer((e),(p),(b),(bs)))
-#define encap_recv_peer(e,p) \
-	((e)->recv_peer((e),(p)))
+int volatile do_kill;
+static uint8_t global_buffer_rx[MAX_HEADER + MAX_PACKET + ETH_HLEN];
+static uint8_t global_buffer_tx[MAX_HEADER + MAX_PACKET + ETH_HLEN];
 
 /*
  * in_cksum --
  *	Checksum routine for Internet Protocol family headers (C Version)
  */
-u_short in_cksum(addr, len)
-	u_short *addr;
-	int len;
+static u_short in_cksum(u_short *addr, int len)
 {
 	register int nleft = len;
 	register u_short *w = addr;
@@ -217,105 +160,77 @@ u_short in_cksum(addr, len)
 /*
  * Decapsulate from a raw IP packet
  */
-int encap_rawip_recv(struct encap_method *encap,
-	unsigned char *buf, unsigned int bufsize, struct sockaddr_in *from)
+static int encap_rawip_recv(struct sa_block *s, unsigned char *buf, unsigned int bufsize)
 {
-	int r;
+	ssize_t r;
 	struct ip *p = (struct ip *)buf;
-
-	encap->fromlen = sizeof(encap->from);
-
-	r = recvfrom(encap->fd, buf, bufsize, 0, (struct sockaddr *)&encap->from, &encap->fromlen);
+	struct sockaddr_in from;
+	socklen_t fromlen = sizeof(from);
+	
+	r = recvfrom(s->esp_fd, buf, bufsize, 0, (struct sockaddr *)&from, &fromlen);
 	if (r == -1) {
 		syslog(LOG_ERR, "recvfrom: %m");
 		return -1;
 	}
-	if (r < (p->ip_hl << 2) + encap->fixed_header_size) {
-		syslog(LOG_ALERT, "packet too short from %s", inet_ntoa(encap->from.sin_addr));
+	if (from.sin_addr.s_addr != s->dst.s_addr) {
+		syslog(LOG_ALERT, "packet from unknown host %s", inet_ntoa(from.sin_addr));
 		return -1;
 	}
-#if 0
-	printf("raw got %d bytes\n", r);
-	for (i = 0; i < r; i++) {
-		printf(" %02x", buf[i]);
-		if ((i & 15) == 15)
-			printf("\n");
+	if (r < (p->ip_hl << 2) + s->ipsec.em->fixed_header_size) {
+		syslog(LOG_ALERT, "packet too short");
+		return -1;
 	}
-	printf("\n");
-#endif
 
-#ifdef NEED_IPID_SWAP
-	p->ip_id = htons(p->ip_id);
-#endif
 #ifdef NEED_IPLEN_FIX
 	p->ip_len = r;
 #else
 	p->ip_len = ntohs(r);
 #endif
 
-	encap->buf = buf;
-	encap->buflen = r;
-	encap->bufpayload = (p->ip_hl << 2);
-	encap->bufsize = bufsize;
-	*from = encap->from;
+	s->ipsec.rx.buf = buf;
+	s->ipsec.rx.buflen = r;
+	s->ipsec.rx.bufpayload = (p->ip_hl << 2);
+	s->ipsec.rx.bufsize = bufsize;
 	return r;
 }
 
 /*
  * Decapsulate from an UDP packet
  */
-int encap_udp_recv(struct encap_method *encap,
-	unsigned char *buf, unsigned int bufsize,
-	struct sockaddr_in *from)
+static int encap_udp_recv(struct sa_block *s, unsigned char *buf, unsigned int bufsize)
 {
-	int r;
+	ssize_t r;
 
-	encap->fromlen = sizeof(encap->from);
-
-	r = recvfrom(encap->fd, buf, bufsize, 0,
-		(struct sockaddr *)&encap->from, &encap->fromlen);
+	r = recv(s->esp_fd, buf, bufsize, 0);
 	if (r == -1) {
 		syslog(LOG_ERR, "recvfrom: %m");
 		return -1;
 	}
-	if (r < encap->fixed_header_size) {
+	if (s->ipsec.natt_active_mode == NATT_ACTIVE_DRAFT_OLD && r > 8) {
+		r -= 8;
+		memmove(buf, buf + 8, r);
+	}
+	if (r < s->ipsec.em->fixed_header_size) {
 		syslog(LOG_ALERT, "packet too short from %s",
-			inet_ntoa(encap->from.sin_addr));
+			inet_ntoa(s->dst));
 		return -1;
 	}
 
-#if 0
-	printf("udp got %d bytes\n", r);
-	for (i = 0; i < r; i++) {
-		printf(" %02x", buf[i]);
-		if ((i & 15) == 15) printf("\n");
-	}
-	printf("\n");
-#endif
-
-	encap->buf = buf;
-	encap->buflen = r;
-	encap->bufpayload = 0;
-	encap->bufsize = bufsize;
-	*from = encap->from;
+	s->ipsec.rx.buf = buf;
+	s->ipsec.rx.buflen = r;
+	s->ipsec.rx.bufpayload = 0;
+	s->ipsec.rx.bufsize = bufsize;
 	return r;
-}
-
-struct peer_desc *encap_esp_peer_find(struct encap_method *encap)
-{
-	esp_encap_header_t *eh;
-	eh = (esp_encap_header_t *) (encap->buf + encap->bufpayload);
-	return peer_find(ntohl(eh->spi), encap);
 }
 
 /*
  * Decapsulate packet
  */
-int encap_any_decap(struct encap_method *encap)
+static int encap_any_decap(struct sa_block *s)
 {
-	encap->buflen -= encap->bufpayload + encap->fixed_header_size + encap->var_header_size;
-	encap->buf += encap->bufpayload + encap->fixed_header_size + encap->var_header_size;
-	if (encap->buflen == 0)
+	s->ipsec.rx.buflen -= s->ipsec.rx.bufpayload + s->ipsec.em->fixed_header_size + s->ipsec.rx.var_header_size;
+	s->ipsec.rx.buf    += s->ipsec.rx.bufpayload + s->ipsec.em->fixed_header_size + s->ipsec.rx.var_header_size;
+	if (s->ipsec.rx.buflen == 0)
 		return 0;
 	return 1;
 }
@@ -323,142 +238,45 @@ int encap_any_decap(struct encap_method *encap)
 /*
  * Send decapsulated packet to tunnel device
  */
-int tun_send_ip(struct encap_method *encap, int fd)
+static int tun_send_ip(struct sa_block *s)
 {
-	int sent;
-
-	sent = tun_write(fd, encap->buf, encap->buflen);
-	if (sent != encap->buflen)
-		syslog(LOG_ERR, "truncated in: %d -> %d\n", encap->buflen, sent);
+	int sent, len;
+	uint8_t *start;
+	
+	start = s->ipsec.rx.buf;
+	len   = s->ipsec.rx.buflen;
+	
+	if (opt_if_mode == IF_MODE_TAP) {
+#ifndef __sun__
+		/*
+		 * Add ethernet header before s->ipsec.rx.buf where
+		 * at least ETH_HLEN bytes should be available.
+		 */
+		struct ether_header *eth_hdr = (struct ether_header *) (s->ipsec.rx.buf - ETH_HLEN);
+		
+		memcpy(eth_hdr->ether_dhost, s->tun_hwaddr, ETH_ALEN);
+		memcpy(eth_hdr->ether_shost, s->tun_hwaddr, ETH_ALEN);
+		
+		/* Use a different MAC as source */
+		eth_hdr->ether_shost[0] ^= 0x80; /* toggle some visible bit */
+		eth_hdr->ether_type = htons(ETHERTYPE_IP);
+		
+		start = (uint8_t *) eth_hdr;
+		len += ETH_HLEN;
+#endif
+	}
+	
+	sent = tun_write(s->tun_fd, start, len);
+	if (sent != len)
+		syslog(LOG_ERR, "truncated in: %d -> %d\n", len, sent);
+	hex_dump("Tx pkt", start, len, NULL);
 	return 1;
-}
-
-int encap_esp_new(struct encap_method *encap, unsigned char proto)
-{
-#ifdef IP_HDRINCL
-	int hincl = 1;
-#endif
-
-	encap->fd = socket(PF_INET, SOCK_RAW, proto);
-
-	if (encap->fd == -1) {
-		perror("socket(SOCK_RAW)");
-		return -1;
-	}
-#ifdef IP_HDRINCL
-	if (setsockopt(encap->fd, IPPROTO_IP, IP_HDRINCL, &hincl, sizeof(hincl))
-		== -1) {
-		perror("setsockopt(IP_HDRINCL)");
-		close(encap->fd);
-		return -1;
-	}
-#endif
-	encap->name = "ipesp";
-	encap->recv = encap_rawip_recv;
-	encap->peer_find = encap_esp_peer_find;
-	encap->send_peer = encap_esp_send_peer;
-	encap->recv_peer = encap_esp_recv_peer;
-	encap->fixed_header_size = sizeof(esp_encap_header_t);
-	encap->var_header_size = 0;
-	return 0;
-}
-
-int encap_udp_new(struct encap_method *encap, int udp_fd)
-{
-	encap->fd = udp_fd;
-
-	encap->name = "udpesp";
-	encap->recv = encap_udp_recv;
-	encap->peer_find = encap_esp_peer_find;
-	encap->send_peer = encap_udp_send_peer;
-	encap->recv_peer = encap_esp_recv_peer;
-	encap->fixed_header_size = sizeof(esp_encap_header_t);
-	encap->var_header_size = 0;
-	return 0;
-}
-
-/*
- * This is a hack to retrieve which local IP address the system would use
- * as a source when sending packets to a given destination.
- */
-int find_local_addr(struct sockaddr_in *dest, struct sockaddr_in *source)
-{
-	int addrlen;
-	struct sockaddr_in dest_socket;
-	int fd;
-
-	fd = socket(PF_INET, SOCK_DGRAM, 0);
-	if (fd == -1) {
-		syslog(LOG_ERR, "socket: %m");
-		return -1;
-	}
-
-	memset(&dest_socket, 0, sizeof(dest_socket));
-
-	dest_socket.sin_family = AF_INET;
-#ifdef HAVE_SA_LEN
-	dest_socket.sin_len = sizeof(dest_socket);
-#endif
-	dest_socket.sin_addr = dest->sin_addr;
-	dest_socket.sin_port = htons(4444);
-
-	if (connect(fd, (struct sockaddr *)&dest_socket, sizeof(dest_socket)) == -1) {
-		syslog(LOG_ERR, "connect: %m");
-		close(fd);
-		return -1;
-	}
-
-	addrlen = sizeof(*source);
-
-	if (getsockname(fd, (struct sockaddr *)source, &addrlen) == -1) {
-		syslog(LOG_ERR, "getsockname: %m");
-		close(fd);
-		return -1;
-	}
-	close(fd);
-	return 0;
-}
-
-/*
- * Retrieve and possibly update our local address to a given remote SA.
- * Return 1 if changed, 0 if not, -1 if error.
- */
-int update_sa_addr(struct sa_desc *p)
-{
-	struct sockaddr_in new_addr;
-
-	if (find_local_addr(&p->dest, &new_addr) == -1) {
-		syslog(LOG_ALERT,
-			"can't find a local address for packets to %s",
-			inet_ntoa(p->dest.sin_addr));
-		return -1;
-	}
-	if (new_addr.sin_addr.s_addr != p->source.sin_addr.s_addr) {
-		char addr1[16];
-		p->source.sin_addr = new_addr.sin_addr;
-		strcpy(addr1, inet_ntoa(p->dest.sin_addr));
-		syslog(LOG_NOTICE,
-			"local address for %s is %s", addr1, inet_ntoa(p->source.sin_addr));
-		return 1;
-	}
-	return 0;
-}
-
-/*
- * Find the peer record associated with a given local SPI.
- */
-struct peer_desc *peer_find(unsigned long spi, struct encap_method *encap)
-{
-	if (vpnpeer.local_sa->spi == spi && vpnpeer.local_sa->em == encap)
-		return &vpnpeer;
-	syslog(LOG_ALERT, "unknown spi %ld", spi);
-	return NULL;
 }
 
 /*
  * Compute HMAC for an arbitrary stream of bytes
  */
-int hmac_compute(int md_algo,
+static int hmac_compute(int md_algo,
 	const unsigned char *data, unsigned int data_size,
 	unsigned char *digest, unsigned char do_store,
 	const unsigned char *secret, unsigned short secret_size)
@@ -470,7 +288,7 @@ int hmac_compute(int md_algo,
 
 	/* See RFC 2104 */
 	gcry_md_open(&md_ctx, md_algo, GCRY_MD_FLAG_HMAC);
-	assert(md_ctx != 0);
+	assert(md_ctx != NULL);
 	ret = gcry_md_setkey(md_ctx, secret, secret_size);
 	assert(ret == 0);
 	gcry_md_write(md_ctx, data, data_size);
@@ -491,8 +309,7 @@ int hmac_compute(int md_algo,
 /*
  * Encapsulate a packet in ESP
  */
-void encap_esp_encapsulate(struct encap_method *encap,
-	struct peer_desc *peer)
+static void encap_esp_encapsulate(struct sa_block *s)
 {
 	esp_encap_header_t *eh;
 	unsigned char *iv, *cleartext;
@@ -506,61 +323,54 @@ void encap_esp_encapsulate(struct encap_method *encap,
 	 *      obscure on that point.
 	 * seems fine
 	 */
-	gcry_cipher_algo_info(peer->remote_sa->cry_algo, GCRYCTL_GET_BLKLEN, NULL, &pad_blksz);
+	pad_blksz = s->ipsec.blk_len;
 	while (pad_blksz & 3) /* must be multiple of 4 */
 		pad_blksz <<= 1;
-	padding = pad_blksz - ((encap->buflen + 2 - encap->var_header_size - encap->bufpayload) % pad_blksz);
-	DEBUG(2, printf("sending packet: len = %d, padding = %lu\n", encap->buflen, (unsigned long)padding));
+	padding = pad_blksz - ((s->ipsec.tx.buflen + 2 - s->ipsec.tx.var_header_size - s->ipsec.tx.bufpayload) % pad_blksz);
+	DEBUG(3, printf("sending packet: len = %d, padding = %lu\n", s->ipsec.tx.buflen, (unsigned long)padding));
 	if (padding == pad_blksz)
 		padding = 0;
 
 	for (i = 1; i <= padding; i++) {
-		encap->buf[encap->buflen] = i;
-		encap->buflen++;
+		s->ipsec.tx.buf[s->ipsec.tx.buflen] = i;
+		s->ipsec.tx.buflen++;
 	}
 
 	/* Add trailing padlen and next_header */
-	encap->buf[encap->buflen++] = padding;
-	encap->buf[encap->buflen++] = IPPROTO_IPIP;
+	s->ipsec.tx.buf[s->ipsec.tx.buflen++] = padding;
+	s->ipsec.tx.buf[s->ipsec.tx.buflen++] = IPPROTO_IPIP;
 
-	cleartext = encap->buf + encap->var_header_size + encap->bufpayload;
-	cleartextlen = encap->buflen - encap->var_header_size - encap->bufpayload;
+	cleartext = s->ipsec.tx.buf + s->ipsec.tx.var_header_size + s->ipsec.tx.bufpayload;
+	cleartextlen = s->ipsec.tx.buflen - s->ipsec.tx.var_header_size - s->ipsec.tx.bufpayload;
 
-	eh = (esp_encap_header_t *) (encap->buf + encap->bufpayload);
-	eh->spi = htonl(peer->remote_sa->spi);
-	eh->seq_id = htonl(++peer->remote_sa->seq_id);
+	eh = (esp_encap_header_t *) (s->ipsec.tx.buf + s->ipsec.tx.bufpayload);
+	eh->spi = s->ipsec.tx.spi;
+	eh->seq_id = htonl(s->ipsec.tx.seq_id++);
 
 	/* Copy initialization vector in packet */
 	iv = (unsigned char *)(eh + 1);
-	gcry_randomize(iv, peer->remote_sa->ivlen, GCRY_WEAK_RANDOM);
-	hex_dump("iv", iv, peer->remote_sa->ivlen);
-	hex_dump("auth_secret", peer->remote_sa->auth_secret, peer->remote_sa->auth_secret_size);
+	gcry_create_nonce(iv, s->ipsec.iv_len);
+	hex_dump("iv", iv, s->ipsec.iv_len, NULL);
 
-#if 1
-	hex_dump("sending ESP packet (before crypt)", encap->buf, encap->buflen);
-#endif
+	hex_dump("sending ESP packet (before crypt)", s->ipsec.tx.buf, s->ipsec.tx.buflen, NULL);
 
-	{
-		gcry_cipher_setiv(peer->remote_sa->cry_ctx, iv, peer->remote_sa->ivlen);
-		gcry_cipher_encrypt(peer->remote_sa->cry_ctx, cleartext, cleartextlen, NULL, 0);
+	if (s->ipsec.cry_algo) {
+		gcry_cipher_setiv(s->ipsec.tx.cry_ctx, iv, s->ipsec.iv_len);
+		gcry_cipher_encrypt(s->ipsec.tx.cry_ctx, cleartext, cleartextlen, NULL, 0);
 	}
 
-#if 1
-	hex_dump("sending ESP packet (after crypt)", encap->buf, encap->buflen);
-#endif
+	hex_dump("sending ESP packet (after crypt)", s->ipsec.tx.buf, s->ipsec.tx.buflen, NULL);
 
 	/* Handle optional authentication field */
-	if (peer->remote_sa->md_algo) {
-		hmac_compute(peer->remote_sa->md_algo,
-			encap->buf + encap->bufpayload,
-			encap->var_header_size + cleartextlen,
-			encap->buf + encap->bufpayload
-			+ encap->var_header_size + cleartextlen,
-			1, peer->remote_sa->auth_secret, peer->remote_sa->auth_secret_size);
-		encap->buflen += 12; /*gcry_md_get_algo_dlen(md_algo); see RFC .. only use 96 bit */
-#if 1
-		hex_dump("sending ESP packet (after ah)", encap->buf, encap->buflen);
-#endif
+	if (s->ipsec.md_algo) {
+		hmac_compute(s->ipsec.md_algo,
+			s->ipsec.tx.buf + s->ipsec.tx.bufpayload,
+			s->ipsec.tx.var_header_size + cleartextlen,
+			s->ipsec.tx.buf + s->ipsec.tx.bufpayload
+			+ s->ipsec.tx.var_header_size + cleartextlen,
+			1, s->ipsec.tx.key_md, s->ipsec.md_len);
+		s->ipsec.tx.buflen += 12; /*gcry_md_get_algo_dlen(md_algo); see RFC .. only use 96 bit */
+		hex_dump("sending ESP packet (after ah)", s->ipsec.tx.buf, s->ipsec.tx.buflen, NULL);
 	}
 }
 
@@ -569,61 +379,63 @@ void encap_esp_encapsulate(struct encap_method *encap,
  * "buf" should have exactly MAX_HEADER free bytes at its beginning
  * to account for encapsulation data (not counted in "size").
  */
-void encap_esp_send_peer(struct encap_method *encap,
-	struct peer_desc *peer,
-	unsigned char *buf, unsigned int bufsize)
+static void encap_esp_send_peer(struct sa_block *s, unsigned char *buf, unsigned int bufsize)
 {
 	ssize_t sent;
-	struct ip *tip, *ip;
+	struct ip *tip, ip;
+	struct sockaddr_in dstaddr;
 
 	buf += MAX_HEADER;
 
 	/* Keep a pointer to the old IP header */
 	tip = (struct ip *)buf;
 
-	encap->buf = buf;
-	encap->buflen = bufsize;
+	s->ipsec.tx.buf = buf;
+	s->ipsec.tx.buflen = bufsize;
 
 	/* Prepend our encapsulation header and new IP header */
-	encap->var_header_size = (encap->fixed_header_size + peer->remote_sa->ivlen);
+	s->ipsec.tx.var_header_size = (s->ipsec.em->fixed_header_size + s->ipsec.iv_len);
 
-	encap->buf -= sizeof(struct ip) + encap->var_header_size;
-	encap->buflen += sizeof(struct ip) + encap->var_header_size;
+	s->ipsec.tx.buf -= sizeof(struct ip) + s->ipsec.tx.var_header_size;
+	s->ipsec.tx.buflen += sizeof(struct ip) + s->ipsec.tx.var_header_size;
 
-	encap->bufpayload = sizeof(struct ip);
+	s->ipsec.tx.bufpayload = sizeof(struct ip);
 
-	ip = (struct ip *)(encap->buf);
 	/* Fill non-mutable fields */
-	ip->ip_v = IPVERSION;
-	ip->ip_hl = 5;
+	ip.ip_v = IPVERSION;
+	ip.ip_hl = 5;
 	/*gcry_md_get_algo_dlen(md_algo); see RFC .. only use 96 bit */
-	ip->ip_id = htons(ip_id++);
-	ip->ip_p = IPPROTO_ESP;
-	ip->ip_src = peer->remote_sa->source.sin_addr;
-	ip->ip_dst = peer->remote_sa->dest.sin_addr;
+	ip.ip_id = htons(s->ipsec.ip_id++);
+	ip.ip_p = IPPROTO_ESP;
+	ip.ip_src = s->src;
+	ip.ip_dst = s->dst;
 
 	/* Fill mutable fields */
-	ip->ip_tos = (bufsize < sizeof(struct ip)) ? 0 : tip->ip_tos;
-	ip->ip_off = 0;
-	ip->ip_ttl = IPDEFTTL;
-	ip->ip_sum = 0;
+	ip.ip_tos = (bufsize < sizeof(struct ip)) ? 0 : tip->ip_tos;
+	ip.ip_off = 0;
+	ip.ip_ttl = IPDEFTTL;
+	ip.ip_sum = 0;
 
-	encap_esp_encapsulate(encap, peer);
+	encap_esp_encapsulate(s);
 
-	ip->ip_len = encap->buflen;
+	ip.ip_len = s->ipsec.tx.buflen;
 #ifdef NEED_IPLEN_FIX
-	ip->ip_len = htons(ip->ip_len);
+	ip.ip_len = htons(ip.ip_len);
 #endif
-	ip->ip_sum = in_cksum((u_short *) encap->buf, sizeof(struct ip));
+	ip.ip_sum = in_cksum((u_short *) s->ipsec.tx.buf, sizeof(struct ip));
 
-	sent = sendto(encap->fd, encap->buf, encap->buflen, 0,
-		(struct sockaddr *)&peer->remote_sa->dest, sizeof(peer->remote_sa->dest));
+	memcpy(s->ipsec.tx.buf, &ip, sizeof ip);
+
+	dstaddr.sin_family = AF_INET;
+	dstaddr.sin_addr = s->dst;
+	dstaddr.sin_port = 0;
+	sent = sendto(s->esp_fd, s->ipsec.tx.buf, s->ipsec.tx.buflen, 0, (struct sockaddr *)&dstaddr, sizeof(struct sockaddr_in));
 	if (sent == -1) {
 		syslog(LOG_ERR, "sendto: %m");
 		return;
 	}
-	if (sent != encap->buflen)
-		syslog(LOG_ALERT, "truncated out (%d out of %d)", sent, encap->buflen);
+	if (sent != s->ipsec.tx.buflen)
+		syslog(LOG_ALERT, "truncated out (%lld out of %d)", (long long)sent, s->ipsec.tx.buflen);
 }
 
 /*
@@ -631,39 +443,42 @@ void encap_esp_send_peer(struct encap_method *encap,
  * "buf" should have exactly MAX_HEADER free bytes at its beginning
  * to account for encapsulation data (not counted in "size").
  */
-void encap_udp_send_peer(struct encap_method *encap,
-	struct peer_desc *peer,
-	unsigned char *buf, unsigned int bufsize)
+static void encap_udp_send_peer(struct sa_block *s, unsigned char *buf, unsigned int bufsize)
 {
 	ssize_t sent;
-
+	
 	buf += MAX_HEADER;
-
-	encap->buf = buf;
-	encap->buflen = bufsize;
-
+	
+	s->ipsec.tx.buf = buf;
+	s->ipsec.tx.buflen = bufsize;
+	
 	/* Prepend our encapsulation header and new IP header */
-	encap->var_header_size = (encap->fixed_header_size + peer->remote_sa->ivlen);
-
-	encap->buf -= encap->var_header_size;
-	encap->buflen += encap->var_header_size;
-
-	encap->bufpayload = 0;
-
-	encap_esp_encapsulate(encap, peer);
-
-	sent = sendto(encap->fd, encap->buf, encap->buflen, 0,
-		(struct sockaddr *)&peer->remote_sa->dest, sizeof(peer->remote_sa->dest));
+	s->ipsec.tx.var_header_size = (s->ipsec.em->fixed_header_size + s->ipsec.iv_len);
+	
+	s->ipsec.tx.buf -= s->ipsec.tx.var_header_size;
+	s->ipsec.tx.buflen += s->ipsec.tx.var_header_size;
+	
+	s->ipsec.tx.bufpayload = 0;
+	
+	encap_esp_encapsulate(s);
+	
+	if (s->ipsec.natt_active_mode == NATT_ACTIVE_DRAFT_OLD) {
+		s->ipsec.tx.buf -= 8;
+		s->ipsec.tx.buflen += 8;
+		memset(s->ipsec.tx.buf, 0, 8);
+	}
+	
+	sent = send(s->esp_fd, s->ipsec.tx.buf, s->ipsec.tx.buflen, 0);
 	if (sent == -1) {
 		syslog(LOG_ERR, "sendto: %m");
 		return;
 	}
-	if (sent != encap->buflen)
-		syslog(LOG_ALERT, "truncated out (%Zd out of %Zd)",
-			sent, encap->buflen);
+	if (sent != s->ipsec.tx.buflen)
+		syslog(LOG_ALERT, "truncated out (%lld out of %d)",
+			(long long)sent, s->ipsec.tx.buflen);
 }
 
-int encap_esp_recv_peer(struct encap_method *encap, struct peer_desc *peer)
+static int encap_esp_recv_peer(struct sa_block *s)
 {
 	int len, i;
 	size_t blksz;
@@ -672,11 +487,11 @@ int encap_esp_recv_peer(struct encap_method *encap, struct peer_desc *peer)
 	unsigned char *iv;
 	struct esp_encap_header *eh;
 
-	eh = (struct esp_encap_header *)(encap->buf + encap->bufpayload);
-	encap->var_header_size = peer->local_sa->ivlen;
-	iv = encap->buf + encap->bufpayload + encap->fixed_header_size;
+	eh = (struct esp_encap_header *)(s->ipsec.rx.buf + s->ipsec.rx.bufpayload);
+	s->ipsec.rx.var_header_size = s->ipsec.iv_len;
+	iv = s->ipsec.rx.buf + s->ipsec.rx.bufpayload + s->ipsec.em->fixed_header_size;
 
-	len = encap->buflen - encap->bufpayload - encap->fixed_header_size - encap->var_header_size;
+	len = s->ipsec.rx.buflen - s->ipsec.rx.bufpayload - s->ipsec.em->fixed_header_size - s->ipsec.rx.var_header_size;
 
 	if (len < 0) {
 		syslog(LOG_ALERT, "Packet too short");
@@ -684,57 +499,51 @@ int encap_esp_recv_peer(struct encap_method *encap, struct peer_desc *peer)
 	}
 
 	/* Handle optional authentication field */
-	if (peer->local_sa->md_algo) {
+	if (s->ipsec.md_algo) {
 		len -= 12; /*gcry_md_get_algo_dlen(peer->local_sa->md_algo); */
-		if (hmac_compute(peer->local_sa->md_algo,
-				encap->buf + encap->bufpayload,
-				encap->fixed_header_size + encap->var_header_size + len,
-				encap->buf + encap->bufpayload
-				+ encap->fixed_header_size + encap->var_header_size + len,
+		s->ipsec.rx.buflen -= 12;
+		if (hmac_compute(s->ipsec.md_algo,
+				s->ipsec.rx.buf + s->ipsec.rx.bufpayload,
+				s->ipsec.em->fixed_header_size + s->ipsec.rx.var_header_size + len,
+				s->ipsec.rx.buf + s->ipsec.rx.bufpayload
+				+ s->ipsec.em->fixed_header_size + s->ipsec.rx.var_header_size + len,
 				0,
-				peer->local_sa->auth_secret,
-				peer->local_sa->auth_secret_size) != 0) {
+				s->ipsec.rx.key_md,
+				s->ipsec.md_len) != 0) {
 			syslog(LOG_ALERT, "HMAC mismatch in ESP mode");
 			return -1;
 		}
 	}
 
-	gcry_cipher_algo_info(peer->local_sa->cry_algo, GCRYCTL_GET_BLKLEN, NULL, &blksz);
+	blksz = s->ipsec.blk_len;
 	if ((len % blksz) != 0) {
 		syslog(LOG_ALERT,
 			"payload len %d not a multiple of algorithm block size %lu", len,
 			(unsigned long)blksz);
 		return -1;
 	}
-#if 0
-	printf("receiving ESP packet (before decrypt):\n");
-	for (i = 0; i < len; i++)
-		printf(" %02x", encap->buf[encap->bufpayload
-				+ encap->fixed_header_size + encap->var_header_size + i]);
-	printf("\n");
-#endif
+	
+	hex_dump("receiving ESP packet (before decrypt)",
+		&s->ipsec.rx.buf[s->ipsec.rx.bufpayload + s->ipsec.em->fixed_header_size +
+			 s->ipsec.rx.var_header_size], len, NULL);
 
-	{
+	if (s->ipsec.cry_algo) {
 		unsigned char *data;
 
-		data = (encap->buf + encap->bufpayload
-			+ encap->fixed_header_size + encap->var_header_size);
-		gcry_cipher_setiv(peer->local_sa->cry_ctx, iv, peer->local_sa->ivlen);
-		gcry_cipher_decrypt(peer->local_sa->cry_ctx, data, len, NULL, 0);
+		data = (s->ipsec.rx.buf + s->ipsec.rx.bufpayload
+			+ s->ipsec.em->fixed_header_size + s->ipsec.rx.var_header_size);
+		gcry_cipher_setiv(s->ipsec.rx.cry_ctx, iv, s->ipsec.iv_len);
+		gcry_cipher_decrypt(s->ipsec.rx.cry_ctx, data, len, NULL, 0);
 	}
 
-#if 0
-	printf("receiving ESP packet (after decrypt %d):\n", len);
-	for (i = 0; i < len; i++)
-		printf(" %02x", encap->buf[encap->bufpayload
-				+ encap->fixed_header_size + encap->var_header_size + i]);
-	printf("\n");
-#endif
-
-	padlen = encap->buf[encap->bufpayload
-		+ encap->fixed_header_size + encap->var_header_size + len - 2];
-	next_header = encap->buf[encap->bufpayload
-		+ encap->fixed_header_size + encap->var_header_size + len - 1];
+	hex_dump("receiving ESP packet (after decrypt)",
+		&s->ipsec.rx.buf[s->ipsec.rx.bufpayload + s->ipsec.em->fixed_header_size +
+			s->ipsec.rx.var_header_size], len, NULL);
+	
+	padlen = s->ipsec.rx.buf[s->ipsec.rx.bufpayload
+		+ s->ipsec.em->fixed_header_size + s->ipsec.rx.var_header_size + len - 2];
+	next_header = s->ipsec.rx.buf[s->ipsec.rx.bufpayload
+		+ s->ipsec.em->fixed_header_size + s->ipsec.rx.var_header_size + len - 1];
 
 	if (padlen + 2 > len) {
 		syslog(LOG_ALERT, "Inconsistent padlen");
@@ -744,14 +553,14 @@ int encap_esp_recv_peer(struct encap_method *encap, struct peer_desc *peer)
 		syslog(LOG_ALERT, "Inconsistent next_header %d", next_header);
 		return -1;
 	}
-#if 0
-	printf("pad len: %d, next_header: %d\n", padlen, next_header);
-#endif
+	DEBUG(3, printf("pad len: %d, next_header: %d\n", padlen, next_header));
+
 	len -= padlen + 2;
+	s->ipsec.rx.buflen -= padlen + 2;
 
 	/* Check padding */
-	pad = encap->buf + encap->bufpayload
-		+ encap->fixed_header_size + encap->var_header_size + len;
+	pad = s->ipsec.rx.buf + s->ipsec.rx.bufpayload
+		+ s->ipsec.em->fixed_header_size + s->ipsec.rx.var_header_size + len;
 	for (i = 1; i <= padlen; i++) {
 		if (*pad != i) {
 			syslog(LOG_ALERT, "Bad padding");
@@ -763,254 +572,493 @@ int encap_esp_recv_peer(struct encap_method *encap, struct peer_desc *peer)
 	return 0;
 }
 
-static void vpnc_main_loop(struct peer_desc *peer, struct encap_method *meth, int tun_fd)
+static void encap_esp_new(struct encap_method *encap)
 {
-	struct pollfd pollfds[2];
+	encap->recv = encap_rawip_recv;
+	encap->send_peer = encap_esp_send_peer;
+	encap->recv_peer = encap_esp_recv_peer;
+	encap->fixed_header_size = sizeof(esp_encap_header_t);
+}
 
-	pollfds[0].fd = tun_fd;
-	pollfds[0].events = POLLIN;
-	pollfds[1].fd = encap_get_fd(meth);
-	pollfds[1].events = POLLIN;
+static void encap_udp_new(struct encap_method *encap)
+{
+	encap->recv = encap_udp_recv;
+	encap->send_peer = encap_udp_send_peer;
+	encap->recv_peer = encap_esp_recv_peer;
+	encap->fixed_header_size = sizeof(esp_encap_header_t);
+}
 
-	for (;;) {
+/*
+ * Process ARP 
+ * Return 1 if packet has been processed, 0 otherwise
+ */
+static int process_arp(struct sa_block *s, uint8_t *frame)
+{
+#ifndef __sun__
+	int frame_size;
+	uint8_t tmp[4];
+	struct ether_header *eth = (struct ether_header *) frame;
+	struct ether_arp *arp = (struct ether_arp *) (frame + ETH_HLEN);
+	
+	if (ntohs(eth->ether_type) != ETHERTYPE_ARP) {
+		return 0;
+	}
+	
+	if (ntohs(arp->arp_hrd) != ARPHRD_ETHER ||
+		ntohs(arp->arp_pro) != 0x800 ||
+		arp->arp_hln != ETH_ALEN ||
+		arp->arp_pln != 4 ||
+		ntohs(arp->arp_op) != ARPOP_REQUEST ||
+		!memcmp(arp->arp_spa, arp->arp_tpa, 4) ||
+		memcmp(eth->ether_shost, s->tun_hwaddr, ETH_ALEN) ||
+		!memcmp(arp->arp_tpa, s->our_address, 4)) {
+		/* whatever .. just drop it */
+		return 1;
+	}
+	
+	/* send arp reply */
+	
+	memcpy(eth->ether_dhost, s->tun_hwaddr, ETH_ALEN);
+	eth->ether_shost[0] ^= 0x80; /* Use a different MAC as source */
+	
+	memcpy(tmp, arp->arp_spa, 4);
+	memcpy(arp->arp_spa, arp->arp_tpa, 4);
+	memcpy(arp->arp_tpa, tmp, 4);
+	
+	memcpy(arp->arp_tha, s->tun_hwaddr, ETH_ALEN);
+	arp->arp_sha[0] ^= 0x80; /* Use a different MAC as source */
+	
+	arp->arp_op = htons(ARPOP_REPLY);
+	
+	frame_size = ETH_HLEN + sizeof(struct ether_arp);
+	tun_write(s->tun_fd, frame, frame_size);
+	hex_dump("ARP reply", frame, frame_size, NULL);
+	
+	return 1;
+#else
+	s = 0;
+	frame = 0;
+	return 0;
+#endif
+}
+
+/*
+ * Process non-IP packets
+ * Return 1 if packet has been processed, 0 otherwise
+ */
+static int process_non_ip(struct sa_block *s, uint8_t *frame)
+{
+	struct ether_header *eth = (struct ether_header *) frame;
+	
+	s = NULL; /* unused */
+	
+	if (ntohs(eth->ether_type) != ETHERTYPE_IP) {
+		/* drop non-ip traffic */
+		return 1;
+	}
+	
+	return 0;
+}
+
+static void process_tun(struct sa_block *s)
+{
+	int pack;
+	int size = MAX_PACKET;
+	uint8_t *start = global_buffer_rx + MAX_HEADER;
+	
+	if (opt_if_mode == IF_MODE_TAP) {
+		/* Make sure IP packet starts at buf + MAX_HEADER */
+		start -= ETH_HLEN;
+		size += ETH_HLEN;
+	}
+	
+	/* Receive a packet from the tunnel interface */
+	pack = tun_read(s->tun_fd, start, size);
+	
+	hex_dump("Rx pkt", start, pack, NULL);
+	
+	if (opt_if_mode == IF_MODE_TAP) {
+		if (process_arp(s, start)) {
+			return;
+		}
+		if (process_non_ip(s, start)) {
+			return;
+		}
+		pack -= ETH_HLEN;
+	}
+	
+	if (pack == -1) {
+		syslog(LOG_ERR, "read: %m");
+		return;
+	}
+	
+	/* Don't access the contents of the buffer other than byte aligned.
+	 * 12: Offset of ip source address in ip header,
+	 *  4: Length of IP address */
+	if (!memcmp(global_buffer_rx + MAX_HEADER + 12, &s->dst.s_addr, 4)) {
+		syslog(LOG_ALERT, "routing loop to %s",
+			inet_ntoa(s->dst));
+		return;
+	}
+	
+	/* Encapsulate and send to the other end of the tunnel */
+	s->ipsec.life.tx += pack;
+	s->ipsec.em->send_peer(s, global_buffer_rx, pack);
+}
+
+static void process_socket(struct sa_block *s)
+{
+	/* Receive a packet from a socket */
+	int pack;
+	uint8_t *start = global_buffer_tx;
+	esp_encap_header_t *eh;
+
+	if (opt_if_mode == IF_MODE_TAP) {
+		start += ETH_HLEN;
+	}
+	
+	pack = s->ipsec.em->recv(s, start, MAX_HEADER + MAX_PACKET);
+	if (pack == -1)
+		return;
+	
+	eh = (esp_encap_header_t *) (s->ipsec.rx.buf + s->ipsec.rx.bufpayload);
+	if (eh->spi == 0) {
+		process_late_ike(s, s->ipsec.rx.buf + s->ipsec.rx.bufpayload + 4 /* SPI-size */,
+			s->ipsec.rx.buflen - s->ipsec.rx.bufpayload - 4);
+		return;
+	} else if (eh->spi != s->ipsec.rx.spi) {
+		syslog(LOG_NOTICE, "unknown spi %#08x from peer", ntohl(eh->spi));
+		return;
+	}
+	
+	/* Check auth digest and/or decrypt */
+	if (s->ipsec.em->recv_peer(s) != 0)
+		return;
+	
+	if (encap_any_decap(s) == 0) {
+		syslog(LOG_DEBUG, "received update probe from peer");
+	} else {
+		/* Send the decapsulated packet to the tunnel interface */
+		s->ipsec.life.rx += s->ipsec.rx.buflen;
+		tun_send_ip(s);
+	}
+}
+
+#if defined(__CYGWIN__)
+static void *tun_thread (void *arg)
+{
+	struct sa_block *s = (struct sa_block *) arg;
+	
+	while (!do_kill) {
+		process_tun(s);
+	}
+	return NULL;
+}
+#endif
+
+static void vpnc_main_loop(struct sa_block *s)
+{
+	fd_set rfds, refds;
+	int nfds=0;
+	int enable_keepalives;
+	int timed_mode;
+	ssize_t len;
+	struct timeval select_timeout;
+	struct timeval normal_timeout;
+	time_t next_ike_keepalive=0;
+	time_t next_ike_dpd=0;
+#if defined(__CYGWIN__)
+	pthread_t tid;
+#endif
+	
+	/* non-esp marker, nat keepalive payload (0xFF) */
+	uint8_t keepalive_v2[5] = { 0x00, 0x00, 0x00, 0x00, 0xFF };
+	uint8_t keepalive_v1[1] = { 0xFF };
+	uint8_t *keepalive;
+	size_t keepalive_size;
+	
+	if (s->ipsec.natt_active_mode == NATT_ACTIVE_DRAFT_OLD) {
+		keepalive = keepalive_v1;
+		keepalive_size = sizeof(keepalive_v1);
+	} else { /* active_mode is either RFC or CISCO_UDP */
+		keepalive = keepalive_v2;
+		keepalive_size = sizeof(keepalive_v2);
+	}
+	
+	/* send keepalives if UDP encapsulation is enabled */
+	enable_keepalives = (s->ipsec.encap_mode != IPSEC_ENCAP_TUNNEL);
+	
+	/* regular wakeups if keepalives on ike or dpd active */
+	timed_mode = ((enable_keepalives && s->ike_fd != s->esp_fd) || s->ike.do_dpd);
+	
+	FD_ZERO(&rfds);
+	
+#if !defined(__CYGWIN__)
+	FD_SET(s->tun_fd, &rfds);
+	nfds = MAX(nfds, s->tun_fd +1);
+#endif
+	
+	FD_SET(s->esp_fd, &rfds);
+	nfds = MAX(nfds, s->esp_fd +1);
+	
+	if (s->ike_fd != s->esp_fd) {
+		FD_SET(s->ike_fd, &rfds);
+		nfds = MAX(nfds, s->ike_fd +1);
+	}
+	
+#if defined(__CYGWIN__)
+	if (pthread_create(&tid, NULL, tun_thread, s)) {
+	        syslog(LOG_ERR, "Cannot create tun thread!\n");
+		return;
+	}
+#endif
+	
+	normal_timeout.tv_sec = 86400;
+	normal_timeout.tv_usec = 0;
+	
+	if (s->ike.do_dpd) {
+		/* send initial dpd request */
+		next_ike_dpd = time(NULL) + s->ike.dpd_idle;
+		dpd_ike(s);
+		normal_timeout.tv_sec = s->ike.dpd_idle;
+		normal_timeout.tv_usec = 0;
+	}
+	
+	if (enable_keepalives) {
+		normal_timeout.tv_sec = 9;
+		normal_timeout.tv_usec = 500000;
+
+		if (s->ike_fd != s->esp_fd) {
+			/* send initial nat ike keepalive packet */
+			next_ike_keepalive = time(NULL) + 9;
+			keepalive_ike(s);
+		}
+	}
+	
+	select_timeout = normal_timeout;
+	
+	while (!do_kill) {
 		int presult;
-
+		
 		do {
-			presult = poll(pollfds, sizeof(pollfds) / sizeof(pollfds[0]), -1);
-		} while (presult == -1 && errno == EINTR);
+			struct timeval *tvp = NULL;
+			FD_COPY(&rfds, &refds);
+			if (s->ike.do_dpd || enable_keepalives)
+				tvp = &select_timeout;
+			presult = select(nfds, &refds, NULL, NULL, tvp);
+			if (presult == 0 && (s->ike.do_dpd || enable_keepalives)) {
+				/* reset to max timeout */
+				select_timeout = normal_timeout;
+				if (enable_keepalives) {
+					if (s->ike_fd != s->esp_fd) {
+						/* send nat ike keepalive packet */
+						next_ike_keepalive = time(NULL) + 9;
+						keepalive_ike(s);
+					}
+					/* send nat keepalive packet */
+					if (send(s->esp_fd, keepalive, keepalive_size, 0) == -1) {
+						syslog(LOG_ERR, "sendto: %m");
+					}
+				}
+				if (s->ike.do_dpd) {
+					time_t now = time(NULL);
+					if (s->ike.dpd_seqno != s->ike.dpd_seqno_ack) {
+						/* Wake up more often for dpd attempts */
+						select_timeout.tv_sec = 5;
+						select_timeout.tv_usec = 0;
+						dpd_ike(s);
+						next_ike_dpd = now + s->ike.dpd_idle;
+					}
+					else if (now >= next_ike_dpd) {
+						dpd_ike(s);
+						next_ike_dpd = now + s->ike.dpd_idle;
+					}
+				}
+			}
+			DEBUG(2,printf("lifetime status: %ld of %u seconds used, %u|%u of %u kbytes used\n",
+				time(NULL) - s->ipsec.life.start,
+				s->ipsec.life.seconds,
+				s->ipsec.life.rx/1024,
+				s->ipsec.life.tx/1024,
+				s->ipsec.life.kbytes));
+		} while ((presult == 0 || (presult == -1 && errno == EINTR)) && !do_kill);
 		if (presult == -1) {
-			syslog(LOG_ERR, "poll: %m");
+			syslog(LOG_ERR, "select: %m");
 			continue;
 		}
-
-		if (pollfds[0].revents & POLLIN) {
-			int pack;
-
-			/* Receive a packet from the tunnel interface */
-			pack = tun_read(peer->tun_fd, buf + MAX_HEADER, MAX_PACKET);
-			if (pack == -1) {
-				syslog(LOG_ERR, "read: %m");
-				continue;
-			}
-
-			if (peer->remote_sa->use_dest == 0) {
-				syslog(LOG_NOTICE, "peer hasn't a known address yet");
-				continue;
-			}
-
-			if (((struct ip *)(buf + MAX_HEADER))->ip_dst.s_addr
-				== peer->remote_sa->dest.sin_addr.s_addr) {
-				syslog(LOG_ALERT, "routing loop to %s",
-					inet_ntoa(peer->remote_sa->dest.sin_addr));
-				continue;
-			}
-
-			/* Encapsulate and send to the other end of the tunnel */
-			encap_send_peer(peer->remote_sa->em, peer, buf, pack);
-
-			/* Update sent packet timeout */
-			peer->remote_sa->last_packet_sent = time(NULL);
+		
+#if !defined(__CYGWIN__)
+		if (FD_ISSET(s->tun_fd, &refds)) {
+			process_tun(s);
 		}
-		if (pollfds[1].revents & POLLIN) {
-			/* Receive a packet from a socket */
-			struct peer_desc *peer;
-			int pack;
-			struct sockaddr_in from;
-
-			pack = encap_recv(meth, buf, MAX_HEADER + MAX_PACKET, &from);
-			if (pack == -1)
-				continue;
-
-			peer = encap_peer_find(meth);
-			if (peer == NULL) {
-				syslog(LOG_NOTICE, "unknown spi from %s", inet_ntoa(from.sin_addr));
-				continue;
-			}
-
-			/* Check auth digest and/or decrypt */
-			if (encap_recv_peer(meth, peer) != 0)
-				continue;
-
-			/* Check origin IP; update our copy if need be */
-			if (peer->remote_sa->use_dest == 0
-				|| from.sin_addr.s_addr != peer->remote_sa->dest.sin_addr.s_addr) {
-				/* remote end changed address */
-				char addr1[16];
-				strcpy(addr1, inet_ntoa(peer->remote_sa->dest.sin_addr));
-				syslog(LOG_NOTICE,
-					"spi %ld: remote address changed from %s to %s",
-					peer->remote_sa->spi, addr1, inet_ntoa(from.sin_addr));
-				peer->remote_sa->dest.sin_addr.s_addr = from.sin_addr.s_addr;
-				peer->remote_sa->use_dest = 1;
-				update_sa_addr(peer->remote_sa);
-			}
-			/* Update received packet timeout */
-			peer->remote_sa->last_packet_recv = time(NULL);
-
-			if (encap_any_decap(meth) == 0)
-				syslog(LOG_DEBUG, "received update probe from peer");
-			else
-				/* Send the decapsulated packet to the tunnel interface */
-				tun_send_ip(meth, peer->tun_fd);
+#endif
+		
+		if (FD_ISSET(s->esp_fd, &refds) ) {
+			process_socket(s);
 		}
+		
+		if (s->ike_fd != s->esp_fd && FD_ISSET(s->ike_fd, &refds) ) {
+			DEBUG(3,printf("received something on ike fd..\n"));
+			len = recv(s->ike_fd, global_buffer_tx, MAX_HEADER + MAX_PACKET, 0);
+			process_late_ike(s, global_buffer_tx, len);
+		}
+
+		if (timed_mode) {
+			time_t now = time(NULL);
+			time_t next_up = now + 86400;
+			if (enable_keepalives) {
+				/* never wait more than 9 seconds for a UDP keepalive */
+				next_up = now + 9;
+				if (s->ike_fd != s->esp_fd) {
+					if (now >= next_ike_keepalive) {
+						/* send nat ike keepalive packet now */
+						next_ike_keepalive = now + 9;
+						keepalive_ike(s);
+						select_timeout = normal_timeout;
+					}
+					if (next_ike_keepalive < next_up)
+						next_up = next_ike_keepalive;
+				}
+			}
+			if (s->ike.do_dpd) {
+				if (s->ike.dpd_seqno != s->ike.dpd_seqno_ack) {
+					dpd_ike(s);
+					next_ike_dpd = now + s->ike.dpd_idle;
+					if (now + 5 < next_up)
+						next_up = now + 5;
+				}
+				else if (now >= next_ike_dpd) {
+					dpd_ike(s);
+					next_ike_dpd = now + s->ike.dpd_idle;
+				}
+				if (next_ike_dpd < next_up)
+					next_up = next_ike_dpd;
+			}
+			/* Reduce timeout so next activity happens on schedule */
+			select_timeout.tv_sec = next_up - now;
+			select_timeout.tv_usec = 0;
+		}
+
+	}
+	
+	tun_close(s->tun_fd, s->tun_name);
+	switch (do_kill) {
+		case -2:
+			syslog(LOG_NOTICE, "connection terminated by dead peer detection");
+			break;
+		case -1:
+			syslog(LOG_NOTICE, "connection terminated by peer");
+			break;
+		default:
+			syslog(LOG_NOTICE, "terminated by signal: %d", do_kill);
+			break;
 	}
 }
 
-static uint8_t *volatile kill_packet;
-static size_t volatile kill_packet_size;
-static struct sockaddr *volatile kill_dest;
-
-void killit(int signum)
+static void killit(int signum)
 {
-	int sock = signum; /* unused */
-	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock >= 0) {
-		sendto(sock, kill_packet, kill_packet_size, 0,
-			kill_dest, sizeof(struct sockaddr_in));
-		close(sock);
-	}
-	tun_close(oursa->tun_fd, oursa->tun_name);
-	syslog(LOG_NOTICE, "terminated");
-	_exit(0);
+	do_kill = signum;
 }
 
-void write_pidfile(const char *pidfile)
+static void write_pidfile(const char *pidfile)
 {
 	FILE *pf;
-
-	if (pidfile == NULL)
+	
+	if (pidfile == NULL || pidfile[0] == '\0')
 		return;
-
+	
 	pf = fopen(pidfile, "w");
 	if (pf == NULL) {
 		syslog(LOG_WARNING, "can't open pidfile %s for writing", pidfile);
 		return;
 	}
-
+	
 	fprintf(pf, "%d\n", (int)getpid());
 	fclose(pf);
 }
 
-void
-vpnc_doit(unsigned long tous_spi,
-	const unsigned char *tous_key,
-	struct sockaddr_in *tous_dest,
-	unsigned long tothem_spi,
-	const unsigned char *tothem_key,
-	struct sockaddr_in *tothem_dest,
-	int tun_fd, int md_algo, int cry_algo,
-	uint8_t * kill_packet_p, size_t kill_packet_size_p,
-	struct sockaddr *kill_dest_p,
-	uint16_t encap_mode, int udp_fd,
-	const char *pidfile)
+void vpnc_doit(struct sa_block *s)
 {
+	struct sigaction act;
 	struct encap_method meth;
-
-	static struct sa_desc tous_sa, tothem_sa;
-	time_t t = time(NULL);
-
-	switch (encap_mode) {
+	
+	const char *pidfile = config[CONFIG_PID_FILE];
+	
+	switch (s->ipsec.encap_mode) {
 		case IPSEC_ENCAP_TUNNEL:
-			if (encap_esp_new(&meth, IPPROTO_ESP) == -1)
-				exit(1);
+			encap_esp_new(&meth);
+			gcry_create_nonce(&s->ipsec.ip_id, sizeof(uint16_t));
 			break;
 		case IPSEC_ENCAP_UDP_TUNNEL:
 		case IPSEC_ENCAP_UDP_TUNNEL_OLD:
-			if (encap_udp_new(&meth, udp_fd) == -1)
-				exit(1);
+			encap_udp_new(&meth);
 			break;
 		default:
 			abort();
 	}
-
-	tous_sa.next = remote_sa_list;
-	remote_sa_list = &tous_sa;
-	tous_sa.em = &meth;
-	tous_sa.last_packet_recv = t;
-	tous_sa.last_packet_sent = t;
-	tous_sa.last_checkifaddr = t;
-	tous_sa.md_algo = md_algo;
-	tous_sa.spi = htonl(tous_spi);
-	tous_sa.enc_secret = tous_key;
-	gcry_cipher_algo_info(cry_algo, GCRYCTL_GET_KEYLEN, NULL, &(tous_sa.enc_secret_size));
-	hex_dump("tous.enc_secret", tous_sa.enc_secret, tous_sa.enc_secret_size);
-	tous_sa.auth_secret = tous_key + tous_sa.enc_secret_size;
-	tous_sa.auth_secret_size = gcry_md_get_algo_dlen(md_algo);
-	hex_dump("tous.auth_secret", tous_sa.auth_secret, tous_sa.auth_secret_size);
-	memcpy(&tous_sa.init, tous_dest, sizeof(struct sockaddr_in));
-	memcpy(&tous_sa.dest, tous_dest, sizeof(struct sockaddr_in));
-	if (update_sa_addr(&tous_sa) != -1) {
-		tous_sa.use_fallback = 1;
-		tous_sa.use_dest = 1;
+	s->ipsec.em = &meth;
+	
+	s->ipsec.rx.key_cry = s->ipsec.rx.key;
+	hex_dump("rx.key_cry", s->ipsec.rx.key_cry, s->ipsec.key_len, NULL);
+	
+	s->ipsec.rx.key_md = s->ipsec.rx.key + s->ipsec.key_len;
+	hex_dump("rx.key_md", s->ipsec.rx.key_md, s->ipsec.md_len, NULL);
+	
+	if (s->ipsec.cry_algo) {
+		gcry_cipher_open(&s->ipsec.rx.cry_ctx, s->ipsec.cry_algo, GCRY_CIPHER_MODE_CBC, 0);
+		gcry_cipher_setkey(s->ipsec.rx.cry_ctx, s->ipsec.rx.key_cry, s->ipsec.key_len);
+	} else {
+		s->ipsec.rx.cry_ctx = NULL;
 	}
-	tous_sa.cry_algo = cry_algo;
-	gcry_cipher_open(&tous_sa.cry_ctx, tous_sa.cry_algo, GCRY_CIPHER_MODE_CBC, 0);
-	gcry_cipher_setkey(tous_sa.cry_ctx, tous_sa.enc_secret, tous_sa.enc_secret_size);
-	gcry_cipher_algo_info(tous_sa.cry_algo, GCRYCTL_GET_BLKLEN, NULL, &(tous_sa.ivlen));
-
-	tothem_sa.next = local_sa_list;
-	local_sa_list = &tothem_sa;
-	tothem_sa.em = &meth;
-	tothem_sa.last_packet_recv = t;
-	tothem_sa.last_packet_sent = t;
-	tothem_sa.last_checkifaddr = t;
-	tothem_sa.md_algo = md_algo;
-	tothem_sa.spi = htonl(tothem_spi);
-	tothem_sa.enc_secret = tothem_key;
-	gcry_cipher_algo_info(cry_algo, GCRYCTL_GET_KEYLEN, NULL, &(tothem_sa.enc_secret_size));
-	hex_dump("tothem.enc_secret", tothem_sa.enc_secret, tothem_sa.enc_secret_size);
-	tothem_sa.auth_secret = tothem_key + tothem_sa.enc_secret_size;
-	tothem_sa.auth_secret_size = gcry_md_get_algo_dlen(md_algo);
-	hex_dump("tothem.auth_secret", tothem_sa.auth_secret, tothem_sa.auth_secret_size);
-	memcpy(&tothem_sa.init, tothem_dest, sizeof(struct sockaddr_in));
-	memcpy(&tothem_sa.dest, tothem_dest, sizeof(struct sockaddr_in));
-	if (update_sa_addr(&tothem_sa) != -1) {
-		tothem_sa.use_fallback = 1;
-		tothem_sa.use_dest = 1;
+	
+	s->ipsec.tx.key_cry = s->ipsec.tx.key;
+	hex_dump("tx.key_cry", s->ipsec.tx.key_cry, s->ipsec.key_len, NULL);
+	
+	s->ipsec.tx.key_md = s->ipsec.tx.key + s->ipsec.key_len;
+	hex_dump("tx.key_md", s->ipsec.tx.key_md, s->ipsec.md_len, NULL);
+	
+	if (s->ipsec.cry_algo) {
+		gcry_cipher_open(&s->ipsec.tx.cry_ctx, s->ipsec.cry_algo, GCRY_CIPHER_MODE_CBC, 0);
+		gcry_cipher_setkey(s->ipsec.tx.cry_ctx, s->ipsec.tx.key_cry, s->ipsec.key_len);
+	} else {
+		s->ipsec.tx.cry_ctx = NULL;
 	}
-	tothem_sa.cry_algo = cry_algo;
-	gcry_cipher_open(&tothem_sa.cry_ctx, tothem_sa.cry_algo, GCRY_CIPHER_MODE_CBC, 0);
-	gcry_cipher_setkey(tothem_sa.cry_ctx, tothem_sa.enc_secret, tothem_sa.enc_secret_size);
-	gcry_cipher_algo_info(tothem_sa.cry_algo, GCRYCTL_GET_BLKLEN, NULL, &(tothem_sa.ivlen));
-
-	vpnpeer.tun_fd = tun_fd;
-	vpnpeer.local_sa = &tous_sa;
-	vpnpeer.remote_sa = &tothem_sa;
-
-	kill_packet = kill_packet_p;
-	kill_packet_size = kill_packet_size_p;
-	kill_dest = kill_dest_p;
-
-	signal(SIGHUP, killit);
+	
+	DEBUG(2, printf("remote -> local spi: %#08x\n", ntohl(s->ipsec.rx.spi)));
+	DEBUG(2, printf("local -> remote spi: %#08x\n", ntohl(s->ipsec.tx.spi)));
+	
+	do_kill = 0;
+	
+	sigaction(SIGHUP, NULL, &act);
+	if (act.sa_handler == SIG_DFL)
+		signal(SIGHUP, killit);
+	
 	signal(SIGINT, killit);
 	signal(SIGTERM, killit);
-	signal(SIGXCPU, killit);
-#if defined(SIGPWR)
-	signal(SIGPWR, killit);
-#endif
-
+	
 	chdir("/");
-
-	setsid();
+	
 	if (!opt_nd) {
 		pid_t pid;
 		if ((pid = fork()) < 0) {
 			fprintf(stderr, "Warning, could not fork the child process!\n");
 		} else if (pid == 0) {
-			close(0);
-			close(1);
-			close(2);
-			openlog("vpnc", LOG_PID, LOG_DAEMON);
-			write_pidfile(pidfile);
+			close(0); open("/dev/null", O_RDONLY, 0666);
+			close(1); open("/dev/null", O_WRONLY, 0666);
+			close(2); open("/dev/null", O_WRONLY, 0666);
+			setsid();
 		} else {
 			printf("VPNC started in background (pid: %d)...\n", (int)pid);
 			exit(0);
 		}
 	} else {
 		printf("VPNC started in foreground...\n");
-		openlog("vpnc", LOG_PID, LOG_DAEMON);
 	}
-
-	vpnc_main_loop(&vpnpeer, &meth, tun_fd); /* never returns */
-	exit(0);
+	openlog("vpnc", LOG_PID, LOG_DAEMON);
+	write_pidfile(pidfile);
+	
+	vpnc_main_loop(s);
+	
+	if (!opt_nd)
+		unlink(pidfile); /* ignore errors */
 }
