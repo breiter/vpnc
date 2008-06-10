@@ -51,7 +51,7 @@ RELEASE_VERSION := $(shell cat VERSION)
 #OPENSSLLIBS = -lcrypto
 
 CC=gcc
-CFLAGS ?= -O3 -g -DNORTELVPN
+CFLAGS ?= -O3 -g
 CFLAGS += -W -Wall -Wmissing-declarations -Wwrite-strings
 CFLAGS +=  $(shell libgcrypt-config --cflags)
 CPPFLAGS += -DVERSION=\"$(VERSION)\" $(OPENSSL_GPL_VIOLATION)

@@ -272,7 +272,7 @@ static const struct config_names_s {
 		CONFIG_VENDOR, 1, 1,
 		"--vendor",
 		"Vendor ",
-		"<cisco/netscreen>",
+		"<cisco/netscreen/nortel>",
 		"vendor of your IPSec gateway",
 		config_def_vendor
 	}, {
@@ -735,8 +735,10 @@ void do_config(int argc, char **argv)
 			opt_vendor = VENDOR_CISCO;
 		} else if (!strcmp(config[CONFIG_VENDOR], "netscreen")) {
 			opt_vendor = VENDOR_NETSCREEN;
+		} else if (!strcmp(config[CONFIG_VENDOR], "nortel")) {
+			opt_vendor = VENDOR_NORTEL;
 		} else {
-			printf("%s: unknown vendor %s\nknown vendors: cisco netscreen\n", argv[0], config[CONFIG_VENDOR]);
+			printf("%s: unknown vendor %s\nknown vendors: cisco netscreen nortel\n", argv[0], config[CONFIG_VENDOR]);
 			exit(1);
 		}
 	}

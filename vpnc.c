@@ -133,12 +133,12 @@ const struct vid_element vid_list[] = {
 	{ NULL, 0, NULL }
 };
 
-#ifdef NORTELVPN
+// These vars are in use by NORTELVPN
 static int ipsec_cry_algo, ipsec_hash_algo, dh_group;
 static uint16_t encap_mode = IPSEC_ENCAP_TUNNEL;
 uint8_t *tous_keys, *tothem_keys;
 static void phase2_fatal(struct sa_block *s, const char *msg, int id);
-#endif
+
 
 /* What are DWR-Code and DWR-Text ? */
 
@@ -984,16 +984,17 @@ static int do_config_to_env(struct sa_block *s, struct isakmp_attribute *a)
 static struct isakmp_attribute *make_transform_ike(int dh_group, int crypt, int hash, int keylen, int auth)
 {
 	struct isakmp_attribute *a = NULL;
-#if NORTELVPN
-	a = new_isakmp_attribute_16(32767, 10, a);
-#else
-	a = new_isakmp_attribute(IKE_ATTRIB_LIFE_DURATION, a);
-	a->af = isakmp_attr_lots;
-	a->u.lots.length = 4;
-	a->u.lots.data = xallocc(a->u.lots.length);
-	*((uint32_t *) a->u.lots.data) = htonl(2147483);
-	a = new_isakmp_attribute_16(IKE_ATTRIB_LIFE_TYPE, IKE_LIFE_TYPE_SECONDS, a);
-#endif
+	if (opt_vendor == VENDOR_NORTEL) {
+		a = new_isakmp_attribute_16(32767, 10, a);
+	}
+	else {
+		a = new_isakmp_attribute(IKE_ATTRIB_LIFE_DURATION, a);
+		a->af = isakmp_attr_lots;
+		a->u.lots.length = 4;
+		a->u.lots.data = xallocc(a->u.lots.length);
+		*((uint32_t *) a->u.lots.data) = htonl(2147483);
+		a = new_isakmp_attribute_16(IKE_ATTRIB_LIFE_TYPE, IKE_LIFE_TYPE_SECONDS, a);
+	}
 	a = new_isakmp_attribute_16(IKE_ATTRIB_GROUP_DESC, dh_group, a);
 	a = new_isakmp_attribute_16(IKE_ATTRIB_AUTH_METHOD, auth, a);
 	a = new_isakmp_attribute_16(IKE_ATTRIB_HASH, hash, a);
@@ -1017,48 +1018,61 @@ static struct isakmp_payload *make_our_sa_ike(void)
 	r->u.sa.proposals = new_isakmp_payload(ISAKMP_PAYLOAD_P);
 	r->u.sa.proposals->u.p.prot_id = ISAKMP_IPSEC_PROTO_ISAKMP;
 
-#if NORTELVPN
-    auth = 0;
-	if ((opt_auth_mode == AUTH_MODE_CERT) && 
+	if (opt_vendor == VENDOR_NORTEL) {
+    	auth = 0;
+		if ((opt_auth_mode == AUTH_MODE_CERT) && 
 	        (supp_auth[auth].ike_sa_id != IKE_AUTH_RSA_SIG) &&
 			(supp_auth[auth].ike_sa_id != IKE_AUTH_DSS)) {
-	} else if ((opt_auth_mode == AUTH_MODE_HYBRID) &&
+		} else if ((opt_auth_mode == AUTH_MODE_HYBRID) &&
 		    (supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitRSA) &&
 			(supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitDSS)) { 
-	} else if (supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitRSA ||
+		} else if (supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitRSA ||
 			supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitDSS ||
 			supp_auth[auth].ike_sa_id == IKE_AUTH_RSA_SIG ||
 			supp_auth[auth].ike_sa_id == IKE_AUTH_DSS) {
-	} else {
-#else
-	for (auth = 0; supp_auth[auth].name != NULL; auth++) {
-		if (opt_auth_mode == AUTH_MODE_CERT) {
-			if ((supp_auth[auth].ike_sa_id != IKE_AUTH_RSA_SIG) &&
-				(supp_auth[auth].ike_sa_id != IKE_AUTH_DSS))
-				continue;
-		} else if (opt_auth_mode == AUTH_MODE_HYBRID) {
-			if ((supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitRSA) &&
-				(supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitDSS)) 
-				continue;
 		} else {
-			if (supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitRSA ||
-				supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitDSS ||
-				supp_auth[auth].ike_sa_id == IKE_AUTH_RSA_SIG ||
-				supp_auth[auth].ike_sa_id == IKE_AUTH_DSS)
-				continue;
+			for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
+				keylen = supp_crypt[crypt].keylen;
+				for (hash = 0; supp_hash[hash].name != NULL; hash++) {
+					tn = t;
+					t = new_isakmp_payload(ISAKMP_PAYLOAD_T);
+					t->u.t.id = ISAKMP_IPSEC_KEY_IKE;
+					a = make_transform_ike(dh_group_ike, supp_crypt[crypt].ike_sa_id,
+						supp_hash[hash].ike_sa_id, keylen, supp_auth[auth].ike_sa_id);
+					t->u.t.attributes = a;
+					t->next = tn;
+				}
+			}
 		}
-#endif	
-
-		for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
-			keylen = supp_crypt[crypt].keylen;
-			for (hash = 0; supp_hash[hash].name != NULL; hash++) {
-				tn = t;
-				t = new_isakmp_payload(ISAKMP_PAYLOAD_T);
-				t->u.t.id = ISAKMP_IPSEC_KEY_IKE;
-				a = make_transform_ike(dh_group_ike, supp_crypt[crypt].ike_sa_id,
-					supp_hash[hash].ike_sa_id, keylen, supp_auth[auth].ike_sa_id);
-				t->u.t.attributes = a;
-				t->next = tn;
+	}
+	else {
+		for (auth = 0; supp_auth[auth].name != NULL; auth++) {
+			if (opt_auth_mode == AUTH_MODE_CERT) {
+				if ((supp_auth[auth].ike_sa_id != IKE_AUTH_RSA_SIG) &&
+					(supp_auth[auth].ike_sa_id != IKE_AUTH_DSS))
+					continue;
+			} else if (opt_auth_mode == AUTH_MODE_HYBRID) {
+				if ((supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitRSA) &&
+					(supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitDSS)) 
+					continue;
+			} else {
+				if (supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitRSA ||
+					supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitDSS ||
+					supp_auth[auth].ike_sa_id == IKE_AUTH_RSA_SIG ||
+					supp_auth[auth].ike_sa_id == IKE_AUTH_DSS)
+					continue;
+			}
+			for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
+				keylen = supp_crypt[crypt].keylen;
+				for (hash = 0; supp_hash[hash].name != NULL; hash++) {
+					tn = t;
+					t = new_isakmp_payload(ISAKMP_PAYLOAD_T);
+					t->u.t.id = ISAKMP_IPSEC_KEY_IKE;
+					a = make_transform_ike(dh_group_ike, supp_crypt[crypt].ike_sa_id,
+						supp_hash[hash].ike_sa_id, keylen, supp_auth[auth].ike_sa_id);
+					t->u.t.attributes = a;
+					t->next = tn;
+				}
 			}
 		}
 	}
@@ -1172,22 +1186,23 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 		l = l->next->next;
 		l->next = new_isakmp_payload(ISAKMP_PAYLOAD_ID);
 		l = l->next;
-		if (opt_vendor == VENDOR_CISCO)
+		if (opt_vendor == VENDOR_CISCO || opt_vendor == VENDOR_NORTEL)
 			l->u.id.type = ISAKMP_IPSEC_ID_KEY_ID;
 		else
 			l->u.id.type = ISAKMP_IPSEC_ID_USER_FQDN;
 		l->u.id.protocol = IPPROTO_UDP;
 		l->u.id.port = ISAKMP_PORT; /* this must be 500, see rfc2407, 4.6.2 */
-#ifdef NORTELVPN
-		l->u.id.length = 24;
-		l->u.id.data = xallocc(l->u.id.length);
-		gcry_md_hash_buffer(GCRY_MD_SHA1, l->u.id.data, key_id, strlen(key_id));
-		/* memcpy(l->u.id.data, key_id, strlen(key_id)); */
-#else
-		l->u.id.length = strlen(key_id);
-		l->u.id.data = xallocc(l->u.id.length);
-		memcpy(l->u.id.data, key_id, strlen(key_id));
-#endif
+		if (opt_vendor == VENDOR_NORTEL) {
+			l->u.id.length = 24;
+			l->u.id.data = xallocc(l->u.id.length);
+			gcry_md_hash_buffer(GCRY_MD_SHA1, l->u.id.data, key_id, strlen(key_id));
+			/* memcpy(l->u.id.data, key_id, strlen(key_id)); */
+		}
+		else {
+			l->u.id.length = strlen(key_id);
+			l->u.id.data = xallocc(l->u.id.length);
+			memcpy(l->u.id.data, key_id, strlen(key_id));
+		}
 		l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
 			VID_XAUTH, sizeof(VID_XAUTH));
 		l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
@@ -1334,9 +1349,7 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 							break;
 						case IKE_ATTRIB_LIFE_DURATION:
 							/* already processed above in IKE_ATTRIB_LIFE_TYPE: */
-#ifdef NORTELVPN
-						case 32767:
-#endif
+						case IKE_ATTRIB_NORTEL_UNKNOWN:
 							break;
 						default:
 							DEBUG(1, printf
@@ -1534,79 +1547,79 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 		hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(dh_grp), NULL);
 		/* Generate SKEYID.  */
 		{
-#ifdef NORTELVPN
-
-			
-			char shared_key_sha1[20];
 			gcry_md_hd_t hm;
-			uint8_t *hmac;
+			if (opt_vendor == VENDOR_NORTEL) {
+				char shared_key_sha1[20];
+				uint8_t *hmac;
 
-			gcry_md_hash_buffer(GCRY_MD_SHA1, shared_key_sha1, shared_key, strlen(shared_key));
+				gcry_md_hash_buffer(GCRY_MD_SHA1, shared_key_sha1, shared_key, strlen(shared_key));
 
-			gcry_md_open(&hm, GCRY_MD_SHA1, GCRY_MD_FLAG_HMAC);
-			gcry_md_setkey(hm, shared_key_sha1, sizeof(shared_key_sha1));
-			gcry_md_write(hm, key_id, strlen(key_id));
-			gcry_md_final(hm);
-			hmac = gcry_md_read(hm, 0);
+				gcry_md_open(&hm, GCRY_MD_SHA1, GCRY_MD_FLAG_HMAC);
+				gcry_md_setkey(hm, shared_key_sha1, sizeof(shared_key_sha1));
+				gcry_md_write(hm, key_id, strlen(key_id));
+				gcry_md_final(hm);
+				hmac = gcry_md_read(hm, 0);
 				
-			gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
-			gcry_md_setkey(skeyid_ctx, hmac, 20);
-#else
-			gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
-			gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
-#endif
+				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+				gcry_md_setkey(skeyid_ctx, hmac, 20);
+			}
+			else {
+				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+				gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
+			}
 			
 			gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
 			gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
 			gcry_md_final(skeyid_ctx);
-#ifndef NORTELVPN			
-			psk_skeyid = xallocc(s->ike.md_len);
-			memcpy(psk_skeyid, gcry_md_read(skeyid_ctx, 0), s->ike.md_len);
-			if (opt_debug < 99)
-				DEBUG(3, printf("(not dumping psk hash)\n"));
-			else
-				hex_dump("psk_skeyid", psk_skeyid, s->ike.md_len, NULL);
-			gcry_md_close(skeyid_ctx);
-			DEBUG(99, printf("shared-key: %s\n",shared_key));
+			if (opt_vendor != VENDOR_NORTEL) {
+				psk_skeyid = xallocc(s->ike.md_len);
+				memcpy(psk_skeyid, gcry_md_read(skeyid_ctx, 0), s->ike.md_len);
+				if (opt_debug < 99)
+					DEBUG(3, printf("(not dumping psk hash)\n"));
+				else
+					hex_dump("psk_skeyid", psk_skeyid, s->ike.md_len, NULL);
+				gcry_md_close(skeyid_ctx);
+				DEBUG(99, printf("shared-key: %s\n",shared_key));
 			
-			/* SKEYID - psk only */
-			if (s->ike.auth_algo == IKE_AUTH_PRESHARED ||
-				s->ike.auth_algo == IKE_AUTH_XAUTHInitPreShared ||
-				s->ike.auth_algo == IKE_AUTH_XAUTHRespPreShared) {
-				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
-				gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
-				gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
-				gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
-				gcry_md_final(skeyid_ctx);
-			} else if (s->ike.auth_algo == IKE_AUTH_DSS ||
-				s->ike.auth_algo == IKE_AUTH_RSA_SIG ||
-				s->ike.auth_algo == IKE_AUTH_ECDSA_SIG ||
-				s->ike.auth_algo == IKE_AUTH_HybridInitRSA ||
-				s->ike.auth_algo == IKE_AUTH_HybridRespRSA || 
-				s->ike.auth_algo == IKE_AUTH_HybridInitDSS ||
-				s->ike.auth_algo == IKE_AUTH_HybridRespDSS ||
-				s->ike.auth_algo == IKE_AUTH_XAUTHInitDSS ||
-				s->ike.auth_algo == IKE_AUTH_XAUTHRespDSS ||
-				s->ike.auth_algo == IKE_AUTH_XAUTHInitRSA ||
-				s->ike.auth_algo == IKE_AUTH_XAUTHRespRSA) {
-				unsigned char *key;
-				int key_len;
-				key_len = sizeof(i_nonce) + nonce->u.nonce.length;
-				key = xallocc(key_len);
-				memcpy(key, i_nonce, sizeof(i_nonce));
-				memcpy(key + sizeof(i_nonce), nonce->u.nonce.data, nonce->u.nonce.length);
-				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
-				gcry_md_setkey(skeyid_ctx, key, key_len);
-				gcry_md_write(skeyid_ctx, dh_shared_secret, dh_getlen(dh_grp));
-				gcry_md_final(skeyid_ctx);
-			} else
-				error(1, 0, "SKEYID could not be computed: %s", "the selected authentication method is not supported");
-#endif
-			skeyid = gcry_md_read(skeyid_ctx, 0);
-			hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
-#ifdef NORTELVPN
-			gcry_md_close(hm);
-#endif
+				/* SKEYID - psk only */
+				if (s->ike.auth_algo == IKE_AUTH_PRESHARED ||
+					s->ike.auth_algo == IKE_AUTH_XAUTHInitPreShared ||
+					s->ike.auth_algo == IKE_AUTH_XAUTHRespPreShared) {
+					gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+					gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
+					gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
+					gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
+					gcry_md_final(skeyid_ctx);
+				} else if (s->ike.auth_algo == IKE_AUTH_DSS ||
+					s->ike.auth_algo == IKE_AUTH_RSA_SIG ||
+					s->ike.auth_algo == IKE_AUTH_ECDSA_SIG ||
+					s->ike.auth_algo == IKE_AUTH_HybridInitRSA ||
+					s->ike.auth_algo == IKE_AUTH_HybridRespRSA || 
+					s->ike.auth_algo == IKE_AUTH_HybridInitDSS ||
+					s->ike.auth_algo == IKE_AUTH_HybridRespDSS ||
+					s->ike.auth_algo == IKE_AUTH_XAUTHInitDSS ||
+					s->ike.auth_algo == IKE_AUTH_XAUTHRespDSS ||
+					s->ike.auth_algo == IKE_AUTH_XAUTHInitRSA ||
+					s->ike.auth_algo == IKE_AUTH_XAUTHRespRSA) {
+					unsigned char *key;
+					int key_len;
+					key_len = sizeof(i_nonce) + nonce->u.nonce.length;
+					key = xallocc(key_len);
+					memcpy(key, i_nonce, sizeof(i_nonce));
+					memcpy(key + sizeof(i_nonce), nonce->u.nonce.data, nonce->u.nonce.length);
+					gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+					gcry_md_setkey(skeyid_ctx, key, key_len);
+					gcry_md_write(skeyid_ctx, dh_shared_secret, dh_getlen(dh_grp));
+					gcry_md_final(skeyid_ctx);
+				} else
+					error(1, 0, "SKEYID could not be computed: %s", "the selected authentication method is not supported");
+			}
+			else {
+				skeyid = gcry_md_read(skeyid_ctx, 0);
+				hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
+			}
+			if (opt_vendor == VENDOR_NORTEL)
+				gcry_md_close(hm);
 		}
 
 		/* Verify the hash.  */
@@ -2112,9 +2125,7 @@ static int do_phase2_xauth(struct sa_block *s)
 	DEBUGTOP(2, printf("S5.1 xauth_start\n"));
 	/* This can go around for a while.  */
 	for (loopcount = 0;; loopcount++) {
-#ifdef NORTELVPN
 		uint16_t xauth_type_requested = 5;
-#endif
 		struct isakmp_payload *rp;
 		struct isakmp_attribute *a, *ap, *reply_attr;
 		char ntop_buf[32];
@@ -2142,15 +2153,15 @@ static int do_phase2_xauth(struct sa_block *s)
 		if (reject == 0 && r->payload->next->u.modecfg.type == ISAKMP_MODECFG_CFG_SET)
 			break;
 
-#ifdef NORTELVPN
-		if (reject == 0 && r->payload->next->u.modecfg.type == 5)
-			break;
-		if (reject == 0 && r->payload->next->u.modecfg.type == 6)
-		{
-			printf("authentication failed\n");
-			break;
+		if (opt_vendor == VENDOR_NORTEL) {
+			if (reject == 0 && r->payload->next->u.modecfg.type == 5)
+				break;
+			if (reject == 0 && r->payload->next->u.modecfg.type == 6)
+			{
+				printf("authentication failed\n");
+				break;
+			}
 		}
-#endif
 
 		if (reject == 0 && r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REQUEST)
 			reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
@@ -2166,34 +2177,38 @@ static int do_phase2_xauth(struct sa_block *s)
 		 * regardless of whether the user requested interactive mode
 		 * or not. */
 		for (ap = a; ap && seen_answer == 0; ap = ap->next)
-			if (ap->type == ISAKMP_XAUTH_ATTRIB_ANSWER
-			    || ap->type == ISAKMP_XAUTH_ATTRIB_NEXT_PIN
-			    || ap->type == ISAKMP_XAUTH_ATTRIB_PASSCODE)
+			if (ap->type == ISAKMP_XAUTH_ATTRIB_RFC_ANSWER
+			    || ap->type == ISAKMP_XAUTH_ATTRIB_RFC_NEXT_PIN
+			    || ap->type == ISAKMP_XAUTH_ATTRIB_RFC_PASSCODE
+				|| ap->type == ISAKMP_XAUTH_ATTRIB_NORTEL_ANSWER
+			    || ap->type == ISAKMP_XAUTH_ATTRIB_NORTEL_NEXT_PIN
+			    || ap->type == ISAKMP_XAUTH_ATTRIB_NORTEL_PASSCODE)
 				seen_answer = 1;
 
 		for (ap = a; ap && reject == 0; ap = ap->next)
 			switch (ap->type) {
-			case ISAKMP_XAUTH_ATTRIB_TYPE:
+			case ISAKMP_XAUTH_ATTRIB_RFC_TYPE:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_TYPE:
 
-#ifdef NORTELVPN_XAUTHTYPE_AS_REQUEST
 				if (ap->af != isakmp_attr_16 || !(ap->u.attr_16 == 0 || ap->u.attr_16 == 5))
 					reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
-                xauth_type_requested = ap->u.attr_16;
-#else
-
-				if (ap->af != isakmp_attr_16 || ap->u.attr_16 != 0)
-					reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
-#endif
 				break;
-			case ISAKMP_XAUTH_ATTRIB_USER_NAME:
-			case ISAKMP_XAUTH_ATTRIB_USER_PASSWORD:
-			case ISAKMP_XAUTH_ATTRIB_PASSCODE:
-			case ISAKMP_XAUTH_ATTRIB_DOMAIN:
-			case ISAKMP_XAUTH_ATTRIB_ANSWER:
-			case ISAKMP_XAUTH_ATTRIB_NEXT_PIN:
+			case ISAKMP_XAUTH_ATTRIB_RFC_USER_NAME:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_USER_NAME:
+			case ISAKMP_XAUTH_ATTRIB_RFC_USER_PASSWORD:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_USER_PASSWORD:
+			case ISAKMP_XAUTH_ATTRIB_RFC_PASSCODE:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_PASSCODE:
+			case ISAKMP_XAUTH_ATTRIB_RFC_DOMAIN:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_DOMAIN:
+			case ISAKMP_XAUTH_ATTRIB_RFC_ANSWER:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_ANSWER:
+			case ISAKMP_XAUTH_ATTRIB_RFC_NEXT_PIN:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_NEXT_PIN:
 			case ISAKMP_XAUTH_ATTRIB_CISCOEXT_VENDOR:
 				break;
-			case ISAKMP_XAUTH_ATTRIB_MESSAGE:
+			case ISAKMP_XAUTH_ATTRIB_RFC_MESSAGE:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_MESSAGE:
 				if (opt_debug || seen_answer || config[CONFIG_XAUTH_INTERACTIVE]) {
 					if (ap->af == isakmp_attr_16)
 						printf("%c%c\n", ap->u.attr_16 >> 8, ap->u.attr_16);
@@ -2219,7 +2234,8 @@ static int do_phase2_xauth(struct sa_block *s)
 		reply_attr = NULL;
 		for (ap = a; ap && reject == 0; ap = ap->next)
 			switch (ap->type) {
-			case ISAKMP_XAUTH_ATTRIB_DOMAIN:
+			case ISAKMP_XAUTH_ATTRIB_RFC_DOMAIN:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_DOMAIN:
 				{
 					struct isakmp_attribute *na;
 					na = new_isakmp_attribute(ap->type, reply_attr);
@@ -2233,7 +2249,8 @@ static int do_phase2_xauth(struct sa_block *s)
 						na->u.lots.length);
 					break;
 				}
-			case ISAKMP_XAUTH_ATTRIB_USER_NAME:
+			case ISAKMP_XAUTH_ATTRIB_RFC_USER_NAME:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_USER_NAME:
 				{
 					struct isakmp_attribute *na;
 					na = new_isakmp_attribute(ap->type, reply_attr);
@@ -2244,10 +2261,14 @@ static int do_phase2_xauth(struct sa_block *s)
 						na->u.lots.length);
 					break;
 				}
-			case ISAKMP_XAUTH_ATTRIB_ANSWER:
-			case ISAKMP_XAUTH_ATTRIB_USER_PASSWORD:
-			case ISAKMP_XAUTH_ATTRIB_PASSCODE:
-			case ISAKMP_XAUTH_ATTRIB_NEXT_PIN:
+			case ISAKMP_XAUTH_ATTRIB_RFC_ANSWER:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_ANSWER:
+			case ISAKMP_XAUTH_ATTRIB_RFC_USER_PASSWORD:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_USER_PASSWORD:
+			case ISAKMP_XAUTH_ATTRIB_RFC_PASSCODE:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_PASSCODE:
+			case ISAKMP_XAUTH_ATTRIB_RFC_NEXT_PIN:
+			case ISAKMP_XAUTH_ATTRIB_NORTEL_NEXT_PIN:
 				if (passwd_used && config[CONFIG_NON_INTERACTIVE]) {
 					reject = ISAKMP_N_AUTHENTICATION_FAILED;
 					phase2_fatal(s, "noninteractive can't reuse password", reject);
@@ -2257,9 +2278,11 @@ static int do_phase2_xauth(struct sa_block *s)
 					struct isakmp_attribute *na;
 
 					asprintf(&prompt, "%s for VPN %s@%s: ",
-						(ap->type == ISAKMP_XAUTH_ATTRIB_ANSWER) ?
+						(ap->type == ISAKMP_XAUTH_ATTRIB_RFC_ANSWER 
+						|| ap->type == ISAKMP_XAUTH_ATTRIB_NORTEL_ANSWER) ?
 						"Answer" :
-						(ap->type == ISAKMP_XAUTH_ATTRIB_USER_PASSWORD) ?
+						(ap->type == ISAKMP_XAUTH_ATTRIB_RFC_USER_PASSWORD 
+						|| ap->type == ISAKMP_XAUTH_ATTRIB_NORTEL_USER_PASSWORD) ?
 						"Password" : "Passcode",
 						config[CONFIG_XAUTH_USERNAME], ntop_buf);
 					pass = getpass(prompt);
@@ -2273,12 +2296,13 @@ static int do_phase2_xauth(struct sa_block *s)
 					memset(pass, 0, na->u.lots.length);
 				} else {
 					struct isakmp_attribute *na;
-#ifdef NORTELVPN
-					na = reply_attr->next = new_isakmp_attribute(ISAKMP_XAUTH_ATTRIB_PASSCODE, /* reply_attr */ NULL);
-#else
-					na = new_isakmp_attribute(ap->type, reply_attr);
-					reply_attr = na;
-#endif
+					if (opt_vendor == VENDOR_NORTEL) {
+						na = reply_attr->next = new_isakmp_attribute(ISAKMP_XAUTH_ATTRIB_NORTEL_PASSCODE, /* reply_attr */ NULL);
+					}
+					else {
+						na = new_isakmp_attribute(ap->type, reply_attr);
+						reply_attr = na;
+					}
 					na->u.lots.length = strlen(config[CONFIG_XAUTH_PASSWORD]);
 					na->u.lots.data = xallocc(na->u.lots.length);
 					memcpy(na->u.lots.data, config[CONFIG_XAUTH_PASSWORD],
@@ -2290,9 +2314,9 @@ static int do_phase2_xauth(struct sa_block *s)
 				;
 			}
 
-#ifdef NORTELVPN
-		reply_attr = new_isakmp_attribute_16(ISAKMP_XAUTH_ATTRIB_TYPE, xauth_type_requested, reply_attr);
-#endif
+		if (opt_vendor == VENDOR_NORTEL) {
+			reply_attr = new_isakmp_attribute_16(ISAKMP_XAUTH_ATTRIB_NORTEL_TYPE, xauth_type_requested, reply_attr);
+		}
 
 		/* Send the response.  */
 		rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
@@ -2328,15 +2352,13 @@ static int do_phase2_xauth(struct sa_block *s)
 	
 	DEBUGTOP(2, printf("S5.6 process xauth response\n"));
 
-#ifndef NORTELVPN
-
-	{
+	if (opt_vendor != VENDOR_NORTEL) {
 		/* The final SET should have just one attribute.  */
 		struct isakmp_attribute *a = r->payload->next->u.modecfg.attributes;
 		uint16_t set_result = 1;
 
 		if (a == NULL
-			|| a->type != ISAKMP_XAUTH_ATTRIB_STATUS
+			|| a->type != ISAKMP_XAUTH_ATTRIB_RFC_STATUS
 			|| a->af != isakmp_attr_16 || a->next != NULL) {
 			reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
 			phase2_fatal(s, "xauth SET response rejected: %s(%d)", reject);
@@ -2355,8 +2377,6 @@ static int do_phase2_xauth(struct sa_block *s)
 			error(2, 0, "authentication unsuccessful");
 	}
 
-#endif
-
 	DEBUGTOP(2, printf("S5.7 xauth done\n"));
 	return 0;
 }
@@ -2367,92 +2387,95 @@ static int do_phase2_config(struct sa_block *s)
 	struct isakmp_payload *rp;
 	struct isakmp_attribute *a, *reply_attr = NULL;
 	int reject;
-
-#ifndef NORTELVPN
-	struct utsname uts;
 	uint32_t msgid;
-
-	uname(&uts);
-
-	gcry_create_nonce((uint8_t *) & msgid, sizeof(msgid));
-	if (msgid == 0)
-		msgid = 1;
-
-	rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
-	rp->u.modecfg.type = ISAKMP_MODECFG_CFG_REQUEST;
-	rp->u.modecfg.id = 20;
-	a = NULL;
-
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_APPLICATION_VERSION, a);
-	a->u.lots.length = strlen(config[CONFIG_VERSION]);
-	a->u.lots.data = xallocc(a->u.lots.length);
-	memcpy(a->u.lots.data, config[CONFIG_VERSION], a->u.lots.length);
-
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DDNS_HOSTNAME, a);
-	a->u.lots.length = strlen(uts.nodename);
-	a->u.lots.data = xallocc(a->u.lots.length);
-	memcpy(a->u.lots.data, uts.nodename, a->u.lots.length);
-
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_SPLIT_INC, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_SAVE_PW, a);
 	
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_BANNER, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DO_PFS, a);
-	if (opt_natt_mode == NATT_CISCO_UDP)
-		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_UDP_ENCAP_PORT, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DEF_DOMAIN, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_NBNS, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_DNS, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_NETMASK, a);
-	a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_ADDRESS, a);
+	if (opt_vendor != VENDOR_NORTEL) {
+		struct utsname uts;
 
-	rp->u.modecfg.attributes = a;
-	sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION, msgid, 0, 0, 0, 0, 0, 0, 0);
-#else
-	r_length = sendrecv(s,r_packet, sizeof(r_packet), NULL, 0, 0);
-#endif
+		uname(&uts);
+
+		gcry_create_nonce((uint8_t *) & msgid, sizeof(msgid));
+		if (msgid == 0)
+			msgid = 1;
+
+		rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
+		rp->u.modecfg.type = ISAKMP_MODECFG_CFG_REQUEST;
+		rp->u.modecfg.id = 20;
+		a = NULL;
+
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_APPLICATION_VERSION, a);
+		a->u.lots.length = strlen(config[CONFIG_VERSION]);
+		a->u.lots.data = xallocc(a->u.lots.length);
+		memcpy(a->u.lots.data, config[CONFIG_VERSION], a->u.lots.length);
+
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DDNS_HOSTNAME, a);
+		a->u.lots.length = strlen(uts.nodename);
+		a->u.lots.data = xallocc(a->u.lots.length);
+		memcpy(a->u.lots.data, uts.nodename, a->u.lots.length);
+
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_SPLIT_INC, a);
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_SAVE_PW, a);
+	
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_BANNER, a);
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DO_PFS, a);
+		if (opt_natt_mode == NATT_CISCO_UDP)
+			a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_UDP_ENCAP_PORT, a);
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_CISCO_DEF_DOMAIN, a);
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_NBNS, a);
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_DNS, a);
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_NETMASK, a);
+		a = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_INTERNAL_IP4_ADDRESS, a);
+
+		rp->u.modecfg.attributes = a;
+		sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION, msgid, 0, 0, 0, 0, 0, 0, 0);
+	}
+	else {
+		r_length = sendrecv(s,r_packet, sizeof(r_packet), NULL, 0, 0);
+	}
 
 	/* recv and check for notices */
 	reject = do_phase2_notice_check(s, &r);
 	if (reject == -1)
 		return 1;
 
-#ifndef NORTELVPN
-	/* Check the transaction type & message ID are OK.  */
-	if (reject == 0 && r->message_id != msgid)
-		reject = ISAKMP_N_INVALID_MESSAGE_ID;
-	if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
-		reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
-#else
-	if (r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
-		reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
-#endif
+	if (opt_vendor != VENDOR_NORTEL) {
+		/* Check the transaction type & message ID are OK.  */
+		if (reject == 0 && r->message_id != msgid)
+			reject = ISAKMP_N_INVALID_MESSAGE_ID;
+		if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
+			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
+	}
+	else {
+		if (r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
+			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
+	}
 
 	/* After the hash, expect an attribute block.  */
 
-#ifndef NORTELVPN
-	if (reject == 0
-		&& (r->payload->next == NULL
-			|| r->payload->next->next != NULL
-			|| r->payload->next->type != ISAKMP_PAYLOAD_MODECFG_ATTR
+	if (opt_vendor != VENDOR_NORTEL) {
+		if (reject == 0
+			&& (r->payload->next == NULL
+				|| r->payload->next->next != NULL
+				|| r->payload->next->type != ISAKMP_PAYLOAD_MODECFG_ATTR
 #if 0
-			|| r->payload->next->u.modecfg.id != 20
+				|| r->payload->next->u.modecfg.id != 20
 #endif
-			|| r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REPLY))
-		reject = ISAKMP_N_PAYLOAD_MALFORMED;
-#else
-	/* After the hash, expect an attribute block.  */
-	if (reject == 0
-		&& (r->payload->next == NULL
-			|| r->payload->next->next != NULL
-			|| r->payload->next->type != ISAKMP_PAYLOAD_MODECFG_ATTR))
-		reject = ISAKMP_N_PAYLOAD_MALFORMED;
+				|| r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REPLY))
+			reject = ISAKMP_N_PAYLOAD_MALFORMED;
+	}
+	else {
+		/* After the hash, expect an attribute block.  */
+		if (reject == 0
+			&& (r->payload->next == NULL
+				|| r->payload->next->next != NULL
+				|| r->payload->next->type != ISAKMP_PAYLOAD_MODECFG_ATTR))
+			reject = ISAKMP_N_PAYLOAD_MALFORMED;
 
-	if (reject == 0
-		&& (r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REPLY)
-		&& (r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_SET))
-		reject = ISAKMP_N_PAYLOAD_MALFORMED;
-#endif
+		if (reject == 0
+			&& (r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REPLY)
+			&& (r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_SET))
+			reject = ISAKMP_N_PAYLOAD_MALFORMED;
+	}
 	
 	if (reject != 0)
 		phase2_fatal(s, "configuration response rejected: %s(%d)", reject);
@@ -2465,22 +2488,22 @@ static int do_phase2_config(struct sa_block *s)
 
 	DEBUG(1, printf("got address %s\n", getenv("INTERNAL_IP4_ADDRESS")));
 
-#ifdef NORTELVPN
-	for (a = r->payload->next->u.modecfg.attributes; a; a = a->next)
-	{
-		if (a->af == isakmp_attr_16)
-			reply_attr = new_isakmp_attribute_16(a->type, 0, reply_attr);
-		else
-			reply_attr = new_isakmp_attribute(a->type, reply_attr);
-	}
+	if (opt_vendor == VENDOR_NORTEL) {
+		for (a = r->payload->next->u.modecfg.attributes; a; a = a->next)
+		{
+			if (a->af == isakmp_attr_16)
+				reply_attr = new_isakmp_attribute_16(a->type, 0, reply_attr);
+			else
+				reply_attr = new_isakmp_attribute(a->type, reply_attr);
+		}
 
-	rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
-	rp->u.modecfg.type = ISAKMP_MODECFG_CFG_ACK;
-	rp->u.modecfg.id = r->payload->next->u.modecfg.id;
-	rp->u.modecfg.attributes = reply_attr;
-	sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION,
-		r->message_id, 1, 0, 0, 0, 0, 0, 0);
-#endif
+		rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
+		rp->u.modecfg.type = ISAKMP_MODECFG_CFG_ACK;
+		rp->u.modecfg.id = r->payload->next->u.modecfg.id;
+		rp->u.modecfg.attributes = reply_attr;
+		sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION,
+			r->message_id, 1, 0, 0, 0, 0, 0, 0);
+	}
 
 	return 0;
 }
@@ -2506,11 +2529,8 @@ static struct isakmp_attribute *make_transform_ipsec(struct sa_block *s, int dh_
 	return a;
 }
 
-#ifdef NORTELVPN
-static struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s, struct isakmp_payload *transform, int proposal_number)
-#else
-static struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
-#endif
+// Nortel specific version
+static struct isakmp_payload *make_our_sa_ipsec_nortel(struct sa_block *s, struct isakmp_payload *transform, int proposal_number)
 {
 	struct isakmp_payload *r = new_isakmp_payload(ISAKMP_PAYLOAD_SA);
 	struct isakmp_payload *p = NULL, *pn;
@@ -2523,14 +2543,6 @@ static struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
 	r->u.sa.doi = ISAKMP_DOI_IPSEC;
 	r->u.sa.situation = ISAKMP_IPSEC_SIT_IDENTITY_ONLY;
 
-#ifndef NORTELVPN
-	r->u.sa.proposals = new_isakmp_payload(ISAKMP_PAYLOAD_P);
-	r->u.sa.proposals->u.p.spi_size = 4;
-	r->u.sa.proposals->u.p.spi = xallocc(4);
-	/* The sadb_sa_spi field is already in network order.  */
-	memcpy(r->u.sa.proposals->u.p.spi, &s->ipsec.rx.spi, 4);
-	r->u.sa.proposals->u.p.prot_id = ISAKMP_IPSEC_PROTO_IPSEC_ESP;
-#else
 	if (transform) {
 		p = new_isakmp_payload(ISAKMP_PAYLOAD_P);
 		p->u.p.spi_size = 4;
@@ -2541,7 +2553,6 @@ static struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
 		p->u.p.transforms = dup_isakmp_payload(transform);
 		p->u.p.number = proposal_number;
 	} else {
-#endif
 		for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
 			keylen = supp_crypt[crypt].keylen;
 			for (hash = 0; supp_hash[hash].name != NULL; hash++) {
@@ -2559,17 +2570,58 @@ static struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
 				p->next = pn;
 			}
 		}
-#ifdef NORTELVPN
 	}
-#endif
 	for (i = 0, pn = p; pn; pn = pn->next)
 		pn->u.p.number = i++;
 	r->u.sa.proposals = p;
 	return r;
 }
 
-#ifdef NORTELVPN
 
+static struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
+{
+	struct isakmp_payload *r = new_isakmp_payload(ISAKMP_PAYLOAD_SA);
+	struct isakmp_payload *p = NULL, *pn;
+	struct isakmp_attribute *a;
+	int dh_grp = get_dh_group_ipsec(s->ipsec.do_pfs)->ipsec_sa_id;
+	unsigned int crypt, hash, keylen;
+	int i;
+
+	r = new_isakmp_payload(ISAKMP_PAYLOAD_SA);
+	r->u.sa.doi = ISAKMP_DOI_IPSEC;
+	r->u.sa.situation = ISAKMP_IPSEC_SIT_IDENTITY_ONLY;
+
+	r->u.sa.proposals = new_isakmp_payload(ISAKMP_PAYLOAD_P);
+	r->u.sa.proposals->u.p.spi_size = 4;
+	r->u.sa.proposals->u.p.spi = xallocc(4);
+	/* The sadb_sa_spi field is already in network order.  */
+	memcpy(r->u.sa.proposals->u.p.spi, &s->ipsec.rx.spi, 4);
+	r->u.sa.proposals->u.p.prot_id = ISAKMP_IPSEC_PROTO_IPSEC_ESP;
+	for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
+		keylen = supp_crypt[crypt].keylen;
+		for (hash = 0; supp_hash[hash].name != NULL; hash++) {
+			pn = p;
+			p = new_isakmp_payload(ISAKMP_PAYLOAD_P);
+			p->u.p.spi_size = 4;
+			p->u.p.spi = xallocc(4);
+			/* The sadb_sa_spi field is already in network order.  */
+			memcpy(p->u.p.spi, &s->ipsec.rx.spi, 4);
+			p->u.p.prot_id = ISAKMP_IPSEC_PROTO_IPSEC_ESP;
+			p->u.p.transforms = new_isakmp_payload(ISAKMP_PAYLOAD_T);
+			p->u.p.transforms->u.t.id = supp_crypt[crypt].ipsec_sa_id;
+			a = make_transform_ipsec(s, dh_grp, supp_hash[hash].ipsec_sa_id, keylen);
+			p->u.p.transforms->u.t.attributes = a;
+			p->next = pn;
+		}
+	}
+	for (i = 0, pn = p; pn; pn = pn->next)
+		pn->u.p.number = i++;
+	r->u.sa.proposals = p;
+	return r;
+}
+
+
+// Nortel specific
 static int check_transform(struct sa_block *s,struct isakmp_payload *transform)
 {
 	int seen_enc, seen_auth = 0, seen_encap = 0, seen_group = 0, seen_keylen = 0;
@@ -2690,6 +2742,7 @@ static int check_transform(struct sa_block *s,struct isakmp_payload *transform)
 	return 1;
 }
 
+// Nortel specific
 static void do_phase2(struct sa_block *s)
 {
 	
@@ -2821,7 +2874,7 @@ static void do_phase2(struct sa_block *s)
 	DEBUGTOP(2, printf("do_phase2: S7.1 QM_packet1\n"));
 
 	gcry_create_nonce((uint8_t *) & s->ipsec.rx.spi, sizeof(s->ipsec.rx.spi));
-	rp = make_our_sa_ipsec(s, transform, proposal->u.p.number);
+	rp = make_our_sa_ipsec_nortel(s, transform, proposal->u.p.number);
 	gcry_create_nonce((uint8_t *) nonce, sizeof(nonce));
 	rp->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_NONCE, nonce, sizeof(nonce));
 
@@ -2877,122 +2930,120 @@ static void do_phase2(struct sa_block *s)
 
 }
 
-#endif //NORTELVPN
 
 
 static void setup_link(struct sa_block *s)
 {
-#ifndef NORTELVPN
-
-	
-	struct isakmp_payload *rp, *us, *ke = NULL, *them, *nonce_r = NULL;
-	struct isakmp_packet *r;
 	struct group *dh_grp = NULL;
-	uint32_t msgid;
-	int reject;
-	uint8_t *p_flat = NULL, *realiv = NULL, realiv_msgid[4];
-	size_t p_size = 0;
 	uint8_t nonce_i[20], *dh_public = NULL;
-	int i;
+	struct isakmp_payload *rp, *us, *ke = NULL, *them, *nonce_r = NULL;
 
-	DEBUGTOP(2, printf("S7.1 QM_packet1\n"));
-	/* Set up the Diffie-Hellman stuff.  */
-	if (get_dh_group_ipsec(s->ipsec.do_pfs)->my_id) {
-		dh_grp = group_get(get_dh_group_ipsec(s->ipsec.do_pfs)->my_id);
-		DEBUG(3, printf("len = %d\n", dh_getlen(dh_grp)));
-		dh_public = xallocc(dh_getlen(dh_grp));
-		dh_create_exchange(dh_grp, dh_public);
-		hex_dump("dh_public", dh_public, dh_getlen(dh_grp), NULL);
-	}
+	if (opt_vendor != VENDOR_NORTEL) {
+		struct isakmp_packet *r;
+		uint32_t msgid;
+		int reject;
+		uint8_t *p_flat = NULL, *realiv = NULL, realiv_msgid[4];
+		size_t p_size = 0;
+		int i;
 
-	gcry_create_nonce((uint8_t *) & s->ipsec.rx.spi, sizeof(s->ipsec.rx.spi));
-	rp = make_our_sa_ipsec(s);
-	gcry_create_nonce((uint8_t *) nonce_i, sizeof(nonce_i));
-	rp->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_NONCE, nonce_i, sizeof(nonce_i));
-
-	us = new_isakmp_payload(ISAKMP_PAYLOAD_ID);
-	us->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR;
-	us->u.id.length = 4;
-	us->u.id.data = xallocc(4);
-	memcpy(us->u.id.data, s->our_address, sizeof(struct in_addr));
-	them = new_isakmp_payload(ISAKMP_PAYLOAD_ID);
-	them->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR_SUBNET;
-	them->u.id.length = 8;
-	them->u.id.data = xallocc(8);
-	init_netaddr((struct in_addr *)them->u.id.data,
-		     config[CONFIG_IPSEC_TARGET_NETWORK]);
-	us->next = them;
-	s->ipsec.life.start = time(NULL);
-
-	if (!dh_grp) {
-		rp->next->next = us;
-	} else {
-		rp->next->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_KE,
-			dh_public, dh_getlen(dh_grp));
-		rp->next->next->next = us;
-	}
-
-	gcry_create_nonce((uint8_t *) & msgid, sizeof(msgid));
-	if (msgid == 0)
-		msgid = 1;
-
-	for (i = 0; i < 4; i++) {
-		DEBUGTOP(2, printf("S7.2 QM_packet2 send_receive\n"));
-		sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_IKE_QUICK,
-			msgid, 0, &p_flat, &p_size, 0, 0, 0, 0);
-
-		if (realiv == NULL) {
-			realiv = xallocc(s->ike.ivlen);
-			memcpy(realiv, s->ike.current_iv, s->ike.ivlen);
-			memcpy(realiv_msgid, s->ike.current_iv_msgid, 4);
+		DEBUGTOP(2, printf("S7.1 QM_packet1\n"));
+		/* Set up the Diffie-Hellman stuff.  */
+		if (get_dh_group_ipsec(s->ipsec.do_pfs)->my_id) {
+			dh_grp = group_get(get_dh_group_ipsec(s->ipsec.do_pfs)->my_id);
+			DEBUG(3, printf("len = %d\n", dh_getlen(dh_grp)));
+			dh_public = xallocc(dh_getlen(dh_grp));
+			dh_create_exchange(dh_grp, dh_public);
+			hex_dump("dh_public", dh_public, dh_getlen(dh_grp), NULL);
 		}
 
-		DEBUGTOP(2, printf("S7.3 QM_packet2 validate type\n"));
-		reject = unpack_verify_phase2(s, r_packet, r_length, &r, nonce_i, sizeof(nonce_i));
+		gcry_create_nonce((uint8_t *) & s->ipsec.rx.spi, sizeof(s->ipsec.rx.spi));
+		rp = make_our_sa_ipsec(s);
+		gcry_create_nonce((uint8_t *) nonce_i, sizeof(nonce_i));
+		rp->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_NONCE, nonce_i, sizeof(nonce_i));
 
-		if (((reject == 0) || (reject == ISAKMP_N_AUTHENTICATION_FAILED))
-			&& r->exchange_type == ISAKMP_EXCHANGE_INFORMATIONAL) {
-			DEBUGTOP(2, printf("S7.4 process and skip lifetime notice\n"));
-			/* handle notifie responder-lifetime */
-			/* (broken hash => ignore AUTHENTICATION_FAILED) */
-			if (reject == 0 && r->payload->next->type != ISAKMP_PAYLOAD_N)
+		us = new_isakmp_payload(ISAKMP_PAYLOAD_ID);
+		us->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR;
+		us->u.id.length = 4;
+		us->u.id.data = xallocc(4);
+		memcpy(us->u.id.data, s->our_address, sizeof(struct in_addr));
+		them = new_isakmp_payload(ISAKMP_PAYLOAD_ID);
+		them->u.id.type = ISAKMP_IPSEC_ID_IPV4_ADDR_SUBNET;
+		them->u.id.length = 8;
+		them->u.id.data = xallocc(8);
+		init_netaddr((struct in_addr *)them->u.id.data,
+		     config[CONFIG_IPSEC_TARGET_NETWORK]);
+		us->next = them;
+		s->ipsec.life.start = time(NULL);
+
+		if (!dh_grp) {
+			rp->next->next = us;
+		} else {
+			rp->next->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_KE,
+				dh_public, dh_getlen(dh_grp));
+			rp->next->next->next = us;
+		}
+
+		gcry_create_nonce((uint8_t *) & msgid, sizeof(msgid));
+		if (msgid == 0)
+			msgid = 1;
+
+		for (i = 0; i < 4; i++) {
+			DEBUGTOP(2, printf("S7.2 QM_packet2 send_receive\n"));
+			sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_IKE_QUICK,
+				msgid, 0, &p_flat, &p_size, 0, 0, 0, 0);
+
+			if (realiv == NULL) {
+				realiv = xallocc(s->ike.ivlen);
+				memcpy(realiv, s->ike.current_iv, s->ike.ivlen);
+				memcpy(realiv_msgid, s->ike.current_iv_msgid, 4);
+			}
+
+			DEBUGTOP(2, printf("S7.3 QM_packet2 validate type\n"));
+			reject = unpack_verify_phase2(s, r_packet, r_length, &r, nonce_i, sizeof(nonce_i));
+
+			if (((reject == 0) || (reject == ISAKMP_N_AUTHENTICATION_FAILED))
+				&& r->exchange_type == ISAKMP_EXCHANGE_INFORMATIONAL) {
+				DEBUGTOP(2, printf("S7.4 process and skip lifetime notice\n"));
+				/* handle notifie responder-lifetime */
+				/* (broken hash => ignore AUTHENTICATION_FAILED) */
+				if (reject == 0 && r->payload->next->type != ISAKMP_PAYLOAD_N)
+					reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
+
+				if (reject == 0
+					&& r->payload->next->u.n.type == ISAKMP_N_IPSEC_RESPONDER_LIFETIME) {
+					if (r->payload->next->u.n.protocol == ISAKMP_IPSEC_PROTO_ISAKMP)
+						lifetime_ike_process(s, r->payload->next->u.n.attributes);
+					else if (r->payload->next->u.n.protocol == ISAKMP_IPSEC_PROTO_IPSEC_ESP)
+						lifetime_ipsec_process(s, r->payload->next->u.n.attributes);
+					else
+						DEBUG(2, printf("got unknown lifetime notice, ignoring..\n"));
+					memcpy(s->ike.current_iv, realiv, s->ike.ivlen);
+					memcpy(s->ike.current_iv_msgid, realiv_msgid, 4);
+					continue;
+				}
+			}
+
+			/* Check the transaction type & message ID are OK.  */
+			if (reject == 0 && r->message_id != msgid)
+				reject = ISAKMP_N_INVALID_MESSAGE_ID;
+
+			if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_IKE_QUICK)
+				reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
+
+			/* The SA payload must be second.  */
+			if (reject == 0 && r->payload->next->type != ISAKMP_PAYLOAD_SA)
 				reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
 
-			if (reject == 0
-				&& r->payload->next->u.n.type == ISAKMP_N_IPSEC_RESPONDER_LIFETIME) {
-				if (r->payload->next->u.n.protocol == ISAKMP_IPSEC_PROTO_ISAKMP)
-					lifetime_ike_process(s, r->payload->next->u.n.attributes);
-				else if (r->payload->next->u.n.protocol == ISAKMP_IPSEC_PROTO_IPSEC_ESP)
-					lifetime_ipsec_process(s, r->payload->next->u.n.attributes);
-				else
-					DEBUG(2, printf("got unknown lifetime notice, ignoring..\n"));
-				memcpy(s->ike.current_iv, realiv, s->ike.ivlen);
-				memcpy(s->ike.current_iv_msgid, realiv_msgid, 4);
-				continue;
-			}
+			if (p_flat)
+				free(p_flat);
+			if (realiv)
+				free(realiv);
+			break;
 		}
 
-		/* Check the transaction type & message ID are OK.  */
-		if (reject == 0 && r->message_id != msgid)
-			reject = ISAKMP_N_INVALID_MESSAGE_ID;
-
-		if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_IKE_QUICK)
-			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
-
-		/* The SA payload must be second.  */
-		if (reject == 0 && r->payload->next->type != ISAKMP_PAYLOAD_SA)
-			reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
-
-		if (p_flat)
-			free(p_flat);
-		if (realiv)
-			free(realiv);
-		break;
-	}
-
-	DEBUGTOP(2, printf("S7.5 QM_packet2 check reject offer\n"));
-	if (reject != 0)
-		phase2_fatal(s, "quick mode response rejected: %s(%d)\n"
+		DEBUGTOP(2, printf("S7.5 QM_packet2 check reject offer\n"));
+		if (reject != 0)
+			phase2_fatal(s, "quick mode response rejected: %s(%d)\n"
 			"this means the concentrator did not like what we had to offer.\n"
 			"Possible reasons are:\n"
 			"  * concentrator configured to require a firewall\n"
@@ -3005,199 +3056,197 @@ static void setup_link(struct sa_block *s)
 			"     uses much CPU-resources on the concentrator\n",
 			reject);
 
-	DEBUGTOP(2, printf("S7.6 QM_packet2 check and process proposal\n"));
-	for (rp = r->payload->next; rp && reject == 0; rp = rp->next)
-		switch (rp->type) {
-		case ISAKMP_PAYLOAD_SA:
-			if (reject == 0 && rp->u.sa.doi != ISAKMP_DOI_IPSEC)
-				reject = ISAKMP_N_DOI_NOT_SUPPORTED;
-			if (reject == 0 && rp->u.sa.situation != ISAKMP_IPSEC_SIT_IDENTITY_ONLY)
-				reject = ISAKMP_N_SITUATION_NOT_SUPPORTED;
-			if (reject == 0 &&
-				(rp->u.sa.proposals == NULL || rp->u.sa.proposals->next != NULL))
-				reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-			if (reject == 0 &&
-				rp->u.sa.proposals->u.p.prot_id != ISAKMP_IPSEC_PROTO_IPSEC_ESP)
-				reject = ISAKMP_N_INVALID_PROTOCOL_ID;
-			if (reject == 0 && rp->u.sa.proposals->u.p.spi_size != 4)
-				reject = ISAKMP_N_INVALID_SPI;
-			if (reject == 0 &&
-				(rp->u.sa.proposals->u.p.transforms == NULL
-					|| rp->u.sa.proposals->u.p.transforms->next != NULL))
-				reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-			if (reject == 0) {
-				struct isakmp_attribute *a
-					= rp->u.sa.proposals->u.p.transforms->u.t.attributes;
-				int seen_enc = rp->u.sa.proposals->u.p.transforms->u.t.id;
-				int seen_auth = 0, seen_encap = 0, seen_group = 0, seen_keylen = 0;
-
-				memcpy(&s->ipsec.tx.spi, rp->u.sa.proposals->u.p.spi, 4);
-
-				for (; a && reject == 0; a = a->next)
-					switch (a->type) {
-					case ISAKMP_IPSEC_ATTRIB_AUTH_ALG:
-						if (a->af == isakmp_attr_16)
-							seen_auth = a->u.attr_16;
-						else
-							reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-						break;
-					case ISAKMP_IPSEC_ATTRIB_ENCAP_MODE:
-						if (a->af == isakmp_attr_16 &&
-							a->u.attr_16 == s->ipsec.encap_mode)
-							seen_encap = 1;
-						else
-							reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-						break;
-					case ISAKMP_IPSEC_ATTRIB_GROUP_DESC:
-						if (dh_grp &&
-							a->af == isakmp_attr_16 &&
-							a->u.attr_16 ==
-							get_dh_group_ipsec(s->ipsec.do_pfs)->ipsec_sa_id)
-							seen_group = 1;
-						else
-							reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-						break;
-					case ISAKMP_IPSEC_ATTRIB_KEY_LENGTH:
-						if (a->af == isakmp_attr_16)
-							seen_keylen = a->u.attr_16;
-						else
-							reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-						break;
-					case ISAKMP_IPSEC_ATTRIB_SA_LIFE_TYPE:
-						/* lifetime duration MUST follow lifetype attribute */
-						if (a->next->type == ISAKMP_IPSEC_ATTRIB_SA_LIFE_DURATION) {
-							lifetime_ipsec_process(s, a);
-						} else
-							reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-						break;
-					case ISAKMP_IPSEC_ATTRIB_SA_LIFE_DURATION:
-						/* already processed above in ISAKMP_IPSEC_ATTRIB_SA_LIFE_TYPE: */
-						break;
-					default:
-						reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
-						break;
-					}
-				if (reject == 0 && (!seen_auth || !seen_encap ||
-						(dh_grp && !seen_group)))
+		DEBUGTOP(2, printf("S7.6 QM_packet2 check and process proposal\n"));
+		for (rp = r->payload->next; rp && reject == 0; rp = rp->next)
+			switch (rp->type) {
+			case ISAKMP_PAYLOAD_SA:
+				if (reject == 0 && rp->u.sa.doi != ISAKMP_DOI_IPSEC)
+					reject = ISAKMP_N_DOI_NOT_SUPPORTED;
+				if (reject == 0 && rp->u.sa.situation != ISAKMP_IPSEC_SIT_IDENTITY_ONLY)
+					reject = ISAKMP_N_SITUATION_NOT_SUPPORTED;
+				if (reject == 0 &&
+					(rp->u.sa.proposals == NULL || rp->u.sa.proposals->next != NULL))
 					reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-
-				if (reject == 0
-					&& get_algo(SUPP_ALGO_HASH, SUPP_ALGO_IPSEC_SA, seen_auth,
-						NULL, 0) == NULL)
+				if (reject == 0 &&
+					rp->u.sa.proposals->u.p.prot_id != ISAKMP_IPSEC_PROTO_IPSEC_ESP)
+					reject = ISAKMP_N_INVALID_PROTOCOL_ID;
+				if (reject == 0 && rp->u.sa.proposals->u.p.spi_size != 4)
+					reject = ISAKMP_N_INVALID_SPI;
+				if (reject == 0 &&
+					(rp->u.sa.proposals->u.p.transforms == NULL
+						|| rp->u.sa.proposals->u.p.transforms->next != NULL))
 					reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-				if (reject == 0
-					&& get_algo(SUPP_ALGO_CRYPT, SUPP_ALGO_IPSEC_SA, seen_enc,
-						NULL, seen_keylen) == NULL)
-					reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
-
 				if (reject == 0) {
-					s->ipsec.cry_algo =
-						get_algo(SUPP_ALGO_CRYPT, SUPP_ALGO_IPSEC_SA,
-						seen_enc, NULL, seen_keylen)->my_id;
-					s->ipsec.md_algo =
-						get_algo(SUPP_ALGO_HASH, SUPP_ALGO_IPSEC_SA,
-						seen_auth, NULL, 0)->my_id;
-					if (s->ipsec.cry_algo) {
-						gcry_cipher_algo_info(s->ipsec.cry_algo, GCRYCTL_GET_KEYLEN, NULL, &(s->ipsec.key_len));
-						gcry_cipher_algo_info(s->ipsec.cry_algo, GCRYCTL_GET_BLKLEN, NULL, &(s->ipsec.blk_len));
-						s->ipsec.iv_len = s->ipsec.blk_len;
-					} else {
-						s->ipsec.key_len = 0;
-						s->ipsec.iv_len = 0;
-						s->ipsec.blk_len = 8; /* seems to be this without encryption... */
-					}
-					s->ipsec.md_len = gcry_md_get_algo_dlen(s->ipsec.md_algo);
-					DEBUG(1, printf("IPSEC SA selected %s-%s\n",
-							get_algo(SUPP_ALGO_CRYPT,
-								SUPP_ALGO_IPSEC_SA, seen_enc, NULL,
-								seen_keylen)->name,
+					struct isakmp_attribute *a
+						= rp->u.sa.proposals->u.p.transforms->u.t.attributes;
+					int seen_enc = rp->u.sa.proposals->u.p.transforms->u.t.id;
+					int seen_auth = 0, seen_encap = 0, seen_group = 0, seen_keylen = 0;
+
+					memcpy(&s->ipsec.tx.spi, rp->u.sa.proposals->u.p.spi, 4);
+
+					for (; a && reject == 0; a = a->next)
+						switch (a->type) {
+						case ISAKMP_IPSEC_ATTRIB_AUTH_ALG:
+							if (a->af == isakmp_attr_16)
+								seen_auth = a->u.attr_16;
+							else
+								reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+							break;
+						case ISAKMP_IPSEC_ATTRIB_ENCAP_MODE:
+							if (a->af == isakmp_attr_16 &&
+								a->u.attr_16 == s->ipsec.encap_mode)
+								seen_encap = 1;
+							else
+								reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+							break;
+						case ISAKMP_IPSEC_ATTRIB_GROUP_DESC:
+							if (dh_grp &&
+								a->af == isakmp_attr_16 &&
+								a->u.attr_16 ==
+								get_dh_group_ipsec(s->ipsec.do_pfs)->ipsec_sa_id)
+								seen_group = 1;
+							else
+								reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+							break;
+						case ISAKMP_IPSEC_ATTRIB_KEY_LENGTH:
+							if (a->af == isakmp_attr_16)
+								seen_keylen = a->u.attr_16;
+							else
+								reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+							break;
+						case ISAKMP_IPSEC_ATTRIB_SA_LIFE_TYPE:
+							/* lifetime duration MUST follow lifetype attribute */
+							if (a->next->type == ISAKMP_IPSEC_ATTRIB_SA_LIFE_DURATION) {
+								lifetime_ipsec_process(s, a);
+							} else
+								reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+							break;
+						case ISAKMP_IPSEC_ATTRIB_SA_LIFE_DURATION:
+							/* already processed above in ISAKMP_IPSEC_ATTRIB_SA_LIFE_TYPE: */
+							break;
+						default:
+							reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
+							break;
+						}
+					if (reject == 0 && (!seen_auth || !seen_encap ||
+							(dh_grp && !seen_group)))
+						reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+
+					if (reject == 0
+						&& get_algo(SUPP_ALGO_HASH, SUPP_ALGO_IPSEC_SA, seen_auth,
+							NULL, 0) == NULL)
+						reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+					if (reject == 0
+						&& get_algo(SUPP_ALGO_CRYPT, SUPP_ALGO_IPSEC_SA, seen_enc,
+							NULL, seen_keylen) == NULL)
+						reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+
+					if (reject == 0) {
+						s->ipsec.cry_algo =
+							get_algo(SUPP_ALGO_CRYPT, SUPP_ALGO_IPSEC_SA,
+							seen_enc, NULL, seen_keylen)->my_id;
+						s->ipsec.md_algo =
 							get_algo(SUPP_ALGO_HASH, SUPP_ALGO_IPSEC_SA,
-								seen_auth, NULL, 0)->name));
-					if (s->ipsec.cry_algo == GCRY_CIPHER_DES && !opt_1des) {
-						error(1, 0, "peer selected (single) DES as \"encrytion\" method.\n"
+							seen_auth, NULL, 0)->my_id;
+						if (s->ipsec.cry_algo) {
+							gcry_cipher_algo_info(s->ipsec.cry_algo, GCRYCTL_GET_KEYLEN, NULL, &(s->ipsec.key_len));
+							gcry_cipher_algo_info(s->ipsec.cry_algo, GCRYCTL_GET_BLKLEN, NULL, &(s->ipsec.blk_len));
+							s->ipsec.iv_len = s->ipsec.blk_len;
+						} else {
+							s->ipsec.key_len = 0;
+							s->ipsec.iv_len = 0;
+							s->ipsec.blk_len = 8; /* seems to be this without encryption... */
+						}
+						s->ipsec.md_len = gcry_md_get_algo_dlen(s->ipsec.md_algo);
+						DEBUG(1, printf("IPSEC SA selected %s-%s\n",
+								get_algo(SUPP_ALGO_CRYPT,
+									SUPP_ALGO_IPSEC_SA, seen_enc, NULL,
+									seen_keylen)->name,
+								get_algo(SUPP_ALGO_HASH, SUPP_ALGO_IPSEC_SA,
+									seen_auth, NULL, 0)->name));
+						if (s->ipsec.cry_algo == GCRY_CIPHER_DES && !opt_1des) {
+							error(1, 0, "peer selected (single) DES as \"encrytion\" method.\n"
 							"This algorithm is considered to weak today\n"
 							"If your vpn concentrator admin still insists on using DES\n"
 							"use the \"--enable-1des\" option.\n");
-					} else if (s->ipsec.cry_algo == GCRY_CIPHER_NONE && !opt_no_encryption) {
-						error(1, 0, "peer selected NULL as \"encrytion\" method.\n"
+						} else if (s->ipsec.cry_algo == GCRY_CIPHER_NONE && !opt_no_encryption) {
+							error(1, 0, "peer selected NULL as \"encrytion\" method.\n"
 							"This is _no_ encryption at all.\n"
 							"Your traffic is still protected against modification with %s\n"
 							"If your vpn concentrator admin still insists on not using encryption\n"
 							"use the \"--enable-no-encryption\" option.\n",
 							get_algo(SUPP_ALGO_HASH, SUPP_ALGO_IPSEC_SA, seen_auth, NULL, 0)->name);
+						}
 					}
 				}
+				break;
+
+			case ISAKMP_PAYLOAD_N:
+				if (reject == 0 && rp->u.n.type == ISAKMP_N_IPSEC_RESPONDER_LIFETIME) {
+					if (rp->u.n.protocol == ISAKMP_IPSEC_PROTO_ISAKMP)
+						lifetime_ike_process(s, rp->u.n.attributes);
+					else if (rp->u.n.protocol == ISAKMP_IPSEC_PROTO_IPSEC_ESP)
+						lifetime_ipsec_process(s, rp->u.n.attributes);
+					else
+						DEBUG(2, printf("got unknown lifetime notice, ignoring..\n"));
+				}
+				break;
+			case ISAKMP_PAYLOAD_ID:
+				/* FIXME: Parse payload ID and add route-env in case of ipv4_prefix */
+				break;
+			case ISAKMP_PAYLOAD_KE:
+				ke = rp;
+				break;
+			case ISAKMP_PAYLOAD_NONCE:
+				nonce_r = rp;
+				break;
+
+			default:
+				reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
+				break;
 			}
-			break;
 
-		case ISAKMP_PAYLOAD_N:
-			if (reject == 0 && rp->u.n.type == ISAKMP_N_IPSEC_RESPONDER_LIFETIME) {
-				if (rp->u.n.protocol == ISAKMP_IPSEC_PROTO_ISAKMP)
-					lifetime_ike_process(s, rp->u.n.attributes);
-				else if (rp->u.n.protocol == ISAKMP_IPSEC_PROTO_IPSEC_ESP)
-					lifetime_ipsec_process(s, rp->u.n.attributes);
-				else
-					DEBUG(2, printf("got unknown lifetime notice, ignoring..\n"));
-			}
-			break;
-		case ISAKMP_PAYLOAD_ID:
-			/* FIXME: Parse payload ID and add route-env in case of ipv4_prefix */
-			break;
-		case ISAKMP_PAYLOAD_KE:
-			ke = rp;
-			break;
-		case ISAKMP_PAYLOAD_NONCE:
-			nonce_r = rp;
-			break;
+		if (reject == 0 && nonce_r == NULL)
+			reject = ISAKMP_N_INVALID_HASH_INFORMATION;
+		if (reject == 0 && dh_grp && (ke == NULL || ke->u.ke.length != dh_getlen(dh_grp)))
+			reject = ISAKMP_N_INVALID_KEY_INFORMATION;
+		if (reject != 0)
+			phase2_fatal(s, "quick mode response rejected [2]: %s(%d)", reject);
 
-		default:
-			reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
-			break;
-		}
+		/* send final packet */
+		sendrecv_phase2(s, NULL, ISAKMP_EXCHANGE_IKE_QUICK,
+			msgid, 1, 0, 0, nonce_i, sizeof(nonce_i),
+			nonce_r->u.nonce.data, nonce_r->u.nonce.length);
 
-	if (reject == 0 && nonce_r == NULL)
-		reject = ISAKMP_N_INVALID_HASH_INFORMATION;
-	if (reject == 0 && dh_grp && (ke == NULL || ke->u.ke.length != dh_getlen(dh_grp)))
-		reject = ISAKMP_N_INVALID_KEY_INFORMATION;
-	if (reject != 0)
-		phase2_fatal(s, "quick mode response rejected [2]: %s(%d)", reject);
-
-	/* send final packet */
-	sendrecv_phase2(s, NULL, ISAKMP_EXCHANGE_IKE_QUICK,
-		msgid, 1, 0, 0, nonce_i, sizeof(nonce_i),
-		nonce_r->u.nonce.data, nonce_r->u.nonce.length);
-
-	DEBUGTOP(2, printf("S7.7 QM_packet3 sent - run script\n"));
-
-#endif //NORTELVPN
+		DEBUGTOP(2, printf("S7.7 QM_packet3 sent - run script\n"));
+	}
 
 	/* Set up the interface here so it's ready when our acknowledgement
 	 * arrives.  */
 	config_tunnel(s);
 	DEBUGTOP(2, printf("S7.8 setup ipsec tunnel\n"));
 	{
-#ifndef NORTELVPN
+		if (opt_vendor != VENDOR_NORTEL) {
+			unsigned char *dh_shared_secret = NULL;
 
-		unsigned char *dh_shared_secret = NULL;
-
-		if (dh_grp) {
-			/* Determine the shared secret.  */
-			dh_shared_secret = xallocc(dh_getlen(dh_grp));
-			dh_create_shared(dh_grp, dh_shared_secret, ke->u.ke.data);
-			hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(dh_grp), NULL);
+			if (dh_grp) {
+				/* Determine the shared secret.  */
+				dh_shared_secret = xallocc(dh_getlen(dh_grp));
+				dh_create_shared(dh_grp, dh_shared_secret, ke->u.ke.data);
+				hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(dh_grp), NULL);
+			}
+		
+			s->ipsec.rx.key = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->ipsec.rx.spi,
+				dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
+				nonce_i, sizeof(nonce_i), nonce_r->u.nonce.data, nonce_r->u.nonce.length);
+		
+			s->ipsec.tx.key = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->ipsec.tx.spi,
+				dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
+				nonce_i, sizeof(nonce_i), nonce_r->u.nonce.data, nonce_r->u.nonce.length);
+		
+			if (dh_grp)
+				group_free(dh_grp);
 		}
-		
-		s->ipsec.rx.key = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->ipsec.rx.spi,
-			dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
-			nonce_i, sizeof(nonce_i), nonce_r->u.nonce.data, nonce_r->u.nonce.length);
-		
-		s->ipsec.tx.key = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->ipsec.tx.spi,
-			dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
-			nonce_i, sizeof(nonce_i), nonce_r->u.nonce.data, nonce_r->u.nonce.length);
-		
-		if (dh_grp)
-			group_free(dh_grp);
-#endif		
 		
 		if ((opt_natt_mode == NATT_CISCO_UDP) && s->ipsec.peer_udpencap_port) {
 			s->esp_fd = make_socket(s, opt_udpencapport, s->ipsec.peer_udpencap_port);
@@ -3598,21 +3647,21 @@ int main(int argc, char **argv)
 		do_phase1(config[CONFIG_IPSEC_ID], config[CONFIG_IPSEC_SECRET], s);
 		DEBUGTOP(2, printf("S5 do_phase2_xauth\n"));
 
-#ifdef NORTELVPN
-		do_load_balance = do_phase2_xauth(s);
-		DEBUGTOP(2, printf("S6 do_phase2_config\n"));
-		do_load_balance = do_phase2_config(s);
-		DEBUGTOP(2, printf("S6 do_phase2\n"));
-		do_phase2(s);
-#else
-		/* FIXME: Create and use a generic function in supp.[hc] */
-		if (s->ike.auth_algo >= IKE_AUTH_HybridInitRSA)
+		if (opt_vendor == VENDOR_NORTEL) {
 			do_load_balance = do_phase2_xauth(s);
-		DEBUGTOP(2, printf("S6 do_phase2_config\n"));
-		if ((opt_vendor == VENDOR_CISCO) && (do_load_balance == 0))
+			DEBUGTOP(2, printf("S6 do_phase2_config\n"));
 			do_load_balance = do_phase2_config(s);
-#endif
-
+			DEBUGTOP(2, printf("S6 do_phase2\n"));
+			do_phase2(s);
+		}
+		else {
+			/* FIXME: Create and use a generic function in supp.[hc] */
+			if (s->ike.auth_algo >= IKE_AUTH_HybridInitRSA)
+				do_load_balance = do_phase2_xauth(s);
+			DEBUGTOP(2, printf("S6 do_phase2_config\n"));
+			if ((opt_vendor == VENDOR_CISCO || opt_vendor == VENDOR_NORTEL) && (do_load_balance == 0))
+				do_load_balance = do_phase2_config(s);
+		}
 	} while (do_load_balance);
 	DEBUGTOP(2, printf("S7 setup_link (phase 2 + main_loop)\n"));
 	setup_link(s);

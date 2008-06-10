@@ -69,7 +69,8 @@ enum hex_dump_enum {
 
 enum vendor_enum {
 	VENDOR_CISCO,
-	VENDOR_NETSCREEN
+	VENDOR_NETSCREEN,
+	VENDOR_NORTEL
 };
 
 enum natt_mode_enum {

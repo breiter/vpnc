@@ -110,9 +110,6 @@ struct isakmp_payload {
 		} d;
 		struct {
 			uint8_t type;
-#ifdef NORTELVPN
-			uint8_t pad;
-#endif
 			uint16_t id;
 			struct isakmp_attribute *attributes;
 		} modecfg;
