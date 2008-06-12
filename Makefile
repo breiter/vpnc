@@ -148,3 +148,4 @@ uninstall :
 .PHONY : clean distclean dist all install install-strip uninstall
 
 #
+-include .depend

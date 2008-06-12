@@ -1,0 +1,2 @@
+#! /bin/sh
+cscript `cygpath -w /etc/vpnc/vpnc-script-win.js`
