@@ -21,7 +21,7 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
-   $Id$
+   $Id: tunip.c 293 2008-06-12 19:05:27Z Joerg Mayer $
 */
 
 /* borrowed from pipsecd (-; */
@@ -177,7 +177,7 @@ static int encap_rawip_recv(struct sa_block *s, unsigned char *buf, unsigned int
 		return -1;
 	}
 	if (r < (p->ip_hl << 2) + s->ipsec.em->fixed_header_size) {
-		syslog(LOG_ALERT, "packet too short");
+		syslog(LOG_ALERT, "packet too short. got %d, expected %d", r, (p->ip_hl << 2) + s->ipsec.em->fixed_header_size);
 		return -1;
 	}
 
@@ -210,9 +210,14 @@ static int encap_udp_recv(struct sa_block *s, unsigned char *buf, unsigned int b
 		r -= 8;
 		memmove(buf, buf + 8, r);
 	}
+	if( r == 1 && *buf == 0xff )
+	{
+		DEBUG(1, "UDP NAT keepalive packet received" );
+		return -1;
+	}
 	if (r < s->ipsec.em->fixed_header_size) {
-		syslog(LOG_ALERT, "packet too short from %s",
-			inet_ntoa(s->dst));
+		syslog(LOG_ALERT, "packet too short from %s. got %d, expected %d",
+			inet_ntoa(s->dst), r, s->ipsec.em->fixed_header_size);
 		return -1;
 	}
 

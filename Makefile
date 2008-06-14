@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #
-# $Id$
+# $Id: Makefile 278 2008-01-13 23:05:52Z Joerg Mayer $
 
 DESTDIR=
 PREFIX=/usr/local
@@ -109,7 +109,7 @@ clean :
 	-rm -f $(OBJS) $(BINOBJS) $(BINS) tags
 
 distclean : clean
-	-rm -f vpnc-debug.c vpnc-debug.h vpnc.ps vpnc.8 .depend
+	-rm -f vpnc-debug.c vpnc-debug.h vpnc.ps vpnc.8 .depend vpnc-script
 
 install-common: all
 	install -d $(DESTDIR)$(ETCDIR) $(DESTDIR)$(BINDIR) $(DESTDIR)$(SBINDIR) $(DESTDIR)$(MANDIR)/man1 $(DESTDIR)$(MANDIR)/man8 $(DESTDIR)$(DOCDIR)

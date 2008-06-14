@@ -108,6 +108,11 @@ const unsigned char VID_NETSCREEN_15[] = { /* netscreen 15 */
 	0xd0, 0xfd, 0x84, 0x51, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00
 };
+const unsigned char VID_HEARTBEAT_NOTIFY[] = { /*Heartbeat Notify*/
+	0x48, 0x65, 0x61, 0x72, 0x74, 0x42, 0x65, 0x61,
+	0x74, 0x5f, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x79,
+	0x38, 0x6b, 0x01, 0x00
+};
 const unsigned char VID_NORTEL_CONT[] = { /* BNES: Bay Networks Enterprise Switch + version/id of some kind */
 	0x42, 0x4e, 0x45, 0x53, 0x00, 0x00, 0x00, 0x0a
 };
@@ -130,6 +135,7 @@ const struct vid_element vid_list[] = {
 	{ VID_CISCO_FRAG,	sizeof(VID_CISCO_FRAG),	"Cisco Fragmentation" },
 	{ VID_NETSCREEN_15,	sizeof(VID_NETSCREEN_15),	"Netscreen 15" },
 	{ VID_NORTEL_CONT,	sizeof(VID_NORTEL_CONT),	"Nortel Contivity" },
+	{ VID_HEARTBEAT_NOTIFY,	sizeof(VID_HEARTBEAT_NOTIFY),	"Heartbeat Notify" },
 
 	{ NULL, 0, NULL }
 };
@@ -150,7 +156,7 @@ void print_vid(const unsigned char *vid, uint16_t len) {
 	
 	int vid_index = 0;
 
-	if (opt_debug < 3)
+	if (opt_debug < 2)
 		return;
 
 	while (vid_list[vid_index].length) {
@@ -314,11 +320,17 @@ static int recv_ignore_dup(struct sa_block *s, void *recvbuf, size_t recvbufsize
 		error(1, errno, "receiving packet");
 	if ((unsigned int)recvsize > recvbufsize)
 		error(1, errno, "received packet too large for buffer");
-	
-	/* skip NAT-T draft-0 keepalives */
-	if ((s->ipsec.natt_active_mode == NATT_ACTIVE_DRAFT_OLD) &&
-		(recvsize == 1) && (*((u_char *)(recvbuf)) == 0xff))
+
+	/* skip (not only) NAT-T draft-0 keepalives */
+	if ( /* (s->ipsec.natt_active_mode == NATT_ACTIVE_DRAFT_OLD) && */
+	    (recvsize == 1) && (*((u_char *)(recvbuf)) == 0xff))
+	{
+		if ((s->ipsec.natt_active_mode != NATT_ACTIVE_DRAFT_OLD))
+		{
+			DEBUG(2, printf("Received UDP NAT-Keepalive bug nat active mode incorrect: %d\n", s->ipsec.natt_active_mode));
+		}
 		return -1;
+	}
 	
 	hash_len = gcry_md_get_algo_dlen(GCRY_MD_SHA1);
 	resend_check_hash = malloc(hash_len);
@@ -488,11 +500,18 @@ static uint16_t unpack_verify_phase2(struct sa_block *s, uint8_t * r_packet,
 	
 	*r_p = NULL;
 
-	if (r_length < ISAKMP_PAYLOAD_O || ((r_length - ISAKMP_PAYLOAD_O) % s->ike.ivlen != 0)) {
+	/* Some users report "payload ... not padded..." errors. It seems that they
+	 * are harmless, so ignore and fix that condition
+	 */
+	if (r_length < ISAKMP_PAYLOAD_O ||
+	    ((r_length - ISAKMP_PAYLOAD_O) % s->ike.ivlen != 0)) {
 		DEBUG(2, printf("payload too short or not padded: len=%lld, min=%d (ivlen=%lld)\n",
 			(long long)r_length, ISAKMP_PAYLOAD_O, (long long)s->ike.ivlen));
 		hex_dump("Payload", r_packet, r_length, NULL);
-		return ISAKMP_N_UNEQUAL_PAYLOAD_LENGTHS;
+		if (r_length < ISAKMP_PAYLOAD_O ) {
+			return ISAKMP_N_UNEQUAL_PAYLOAD_LENGTHS;
+		}
+		r_length -= (r_length - ISAKMP_PAYLOAD_O) % s->ike.ivlen;
 	}
 
 	reject = isakmp_crypt(s, r_packet, r_length, 0);
@@ -1475,6 +1494,14 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 					} else {
 						DEBUG(2, printf("ignoring that peer is DPD capable (RFC3706)\n"));
 					}
+				} else if (rp->u.vid.length == sizeof(VID_NETSCREEN_15)
+					&& memcmp(rp->u.vid.data, VID_NETSCREEN_15,
+						sizeof(VID_NETSCREEN_15)) == 0) {
+					DEBUG(2, printf("peer is using ScreenOS 5.3, 5.4 or 6.0\n"));
+				} else if (rp->u.vid.length == sizeof(VID_HEARTBEAT_NOTIFY)
+					&& memcmp(rp->u.vid.data, VID_HEARTBEAT_NOTIFY,
+						sizeof(VID_HEARTBEAT_NOTIFY)) == 0) {
+					DEBUG(2, printf("peer sent Heartbeat Notify payload\n"));
 				} else {
 					hex_dump("unknown ISAKMP_PAYLOAD_VID",
 						rp->u.vid.data, rp->u.vid.length, NULL);
@@ -2591,7 +2618,6 @@ static struct isakmp_payload *make_our_sa_ipsec(struct sa_block *s)
 	r = new_isakmp_payload(ISAKMP_PAYLOAD_SA);
 	r->u.sa.doi = ISAKMP_DOI_IPSEC;
 	r->u.sa.situation = ISAKMP_IPSEC_SIT_IDENTITY_ONLY;
-
 	r->u.sa.proposals = new_isakmp_payload(ISAKMP_PAYLOAD_P);
 	r->u.sa.proposals->u.p.spi_size = 4;
 	r->u.sa.proposals->u.p.spi = xallocc(4);
