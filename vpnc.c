@@ -1070,8 +1070,7 @@ static struct isakmp_attribute *make_transform_ike(int dh_group, int crypt, int 
 	struct isakmp_attribute *a = NULL;
 	if (opt_vendor == VENDOR_NORTEL) {
 		a = new_isakmp_attribute_16(32767, 10, a);
-	}
-	else {
+	} else {
 		a = new_isakmp_attribute(IKE_ATTRIB_LIFE_DURATION, a);
 		a->af = isakmp_attr_lots;
 		a->u.lots.length = 4;
@@ -1128,8 +1127,7 @@ static struct isakmp_payload *make_our_sa_ike(void)
 				}
 			}
 		}
-	}
-	else {
+	} else {
 		for (auth = 0; supp_auth[auth].name != NULL; auth++) {
 			if (opt_auth_mode == AUTH_MODE_CERT) {
 				if ((supp_auth[auth].ike_sa_id != IKE_AUTH_RSA_SIG) &&
@@ -1282,8 +1280,7 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 			l->u.id.data = xallocc(l->u.id.length);
 			gcry_md_hash_buffer(GCRY_MD_SHA1, l->u.id.data, key_id, strlen(key_id));
 			/* memcpy(l->u.id.data, key_id, strlen(key_id)); */
-		}
-		else {
+		} else {
 			l->u.id.length = strlen(key_id);
 			l->u.id.data = xallocc(l->u.id.length);
 			memcpy(l->u.id.data, key_id, strlen(key_id));
@@ -1654,8 +1651,7 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 				
 				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
 				gcry_md_setkey(skeyid_ctx, hmac, 20);
-			}
-			else {
+			} else {
 				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
 				gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
 			}
@@ -1706,8 +1702,7 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 					gcry_md_final(skeyid_ctx);
 				} else
 					error(1, 0, "SKEYID could not be computed: %s", "the selected authentication method is not supported");
-			}
-			else {
+			} else {
 				skeyid = gcry_md_read(skeyid_ctx, 0);
 				hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
 			}
@@ -2402,8 +2397,7 @@ static int do_phase2_xauth(struct sa_block *s)
 					struct isakmp_attribute *na;
 					if (opt_vendor == VENDOR_NORTEL) {
 						na = reply_attr->next = new_isakmp_attribute(ISAKMP_XAUTH_02_ATTRIB_PASSCODE, /* reply_attr */ NULL);
-					}
-					else {
+					} else {
 						na = new_isakmp_attribute(ap->type, reply_attr);
 						reply_attr = na;
 					}
@@ -2535,8 +2529,7 @@ static int do_phase2_config(struct sa_block *s)
 
 		rp->u.modecfg.attributes = a;
 		sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION, msgid, 0, 0, 0, 0, 0, 0, 0);
-	}
-	else {
+	} else {
 		r_length = sendrecv(s,r_packet, sizeof(r_packet), NULL, 0, 0);
 	}
 
@@ -2553,8 +2546,7 @@ static int do_phase2_config(struct sa_block *s)
 			reject = ISAKMP_N_INVALID_MESSAGE_ID;
 		if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
 			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
-	}
-	else {
+	} else {
 		if (r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
 			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
 	}
@@ -2571,8 +2563,7 @@ static int do_phase2_config(struct sa_block *s)
 #endif
 				|| r->payload->next->u.modecfg.type != ISAKMP_MODECFG_CFG_REPLY))
 			reject = ISAKMP_N_PAYLOAD_MALFORMED;
-	}
-	else {
+	} else {
 		/* After the hash, expect an attribute block.  */
 		if (reject == 0
 			&& (r->payload->next == NULL
@@ -3776,8 +3767,7 @@ int main(int argc, char **argv)
 			do_load_balance = do_phase2_config(s);
 			DEBUGTOP(2, printf("S6 do_phase2\n"));
 			do_phase2(s);
-		}
-		else {
+		} else {
 			/* FIXME: Create and use a generic function in supp.[hc] */
 			if (s->ike.auth_algo >= IKE_AUTH_HybridInitRSA)
 				do_load_balance = do_phase2_xauth(s);
