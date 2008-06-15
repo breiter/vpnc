@@ -17,7 +17,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #
-# $Id: Makefile 278 2008-01-13 23:05:52Z Joerg Mayer $
+# $Id$
 
 DESTDIR=
 PREFIX=/usr/local
