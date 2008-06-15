@@ -230,13 +230,22 @@ static void flow_payload(struct flow *f, struct isakmp_payload *p)
 	flow_payload(f, p->next);
 }
 
-void flatten_isakmp_payload(struct isakmp_payload *p, uint8_t ** result, size_t * size)
+void flatten_isakmp_payloads(struct isakmp_payload *p, uint8_t ** result, size_t * size)
 {
 	struct flow f;
 	init_flow(&f);
 	flow_payload(&f, p);
 	*result = f.base;
 	*size = f.end - f.base;
+}
+
+void flatten_isakmp_payload(struct isakmp_payload *p, uint8_t ** result, size_t * size)
+{
+	struct isakmp_payload *next;
+	next = p->next;
+	p->next = NULL;
+	flatten_isakmp_payloads(p, result, size);
+	p->next = next;
 }
 
 void flatten_isakmp_packet(struct isakmp_packet *p, uint8_t ** result, size_t * size, size_t blksz)

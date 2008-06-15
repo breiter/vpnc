@@ -140,6 +140,7 @@ extern struct isakmp_attribute *new_isakmp_attribute_16(uint16_t type, uint16_t 
 extern struct isakmp_attribute *dup_isakmp_attributes(struct isakmp_attribute *);
 extern void free_isakmp_attributes(struct isakmp_attribute *);
 extern void free_isakmp_packet(struct isakmp_packet *p);
+extern void flatten_isakmp_payloads(struct isakmp_payload *p, uint8_t ** result, size_t * size);
 extern void flatten_isakmp_payload(struct isakmp_payload *p, uint8_t ** result, size_t * size);
 extern void flatten_isakmp_packet(struct isakmp_packet *p,
 	uint8_t ** result, size_t * size, size_t blksz);
