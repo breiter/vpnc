@@ -1069,7 +1069,8 @@ static struct isakmp_attribute *make_transform_ike(int dh_group, int crypt, int 
 {
 	struct isakmp_attribute *a = NULL;
 	if (opt_vendor == VENDOR_NORTEL) {
-		a = new_isakmp_attribute_16(32767, 10, a);
+		a = new_isakmp_attribute_16(IKE_ATTRIB_NORTEL_UNKNOWN,
+			NORTEL_UNKNOWN_10, a);
 	} else {
 		a = new_isakmp_attribute(IKE_ATTRIB_LIFE_DURATION, a);
 		a->af = isakmp_attr_lots;

@@ -235,6 +235,12 @@ enum ike_life_enum {
 	IKE_LIFE_TYPE_K
 };
 
+/* IKE NORTEL-UNKNOWN IDs.  */
+enum ike_nortel_unknown_enum {
+	NORTEL_UNKNOWN_10 = 10,
+	NORTEL_UNKNOWN_20 = 20
+};
+
 /* IPSEC situation masks.  */
 enum isakmp_ipsec_sit_enum {
 	ISAKMP_IPSEC_SIT_IDENTITY_ONLY = 0x1,
