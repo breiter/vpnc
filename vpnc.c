@@ -37,6 +37,7 @@
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/utsname.h>
+#include <ctype.h>
 
 #include <gcrypt.h>
 
@@ -3728,12 +3729,27 @@ void process_late_ike(struct sa_block *s, uint8_t *r_packet, ssize_t r_length)
 	return;
 }
 
+static char * tolowercase(const char *s)
+{
+	int i, l;
+	char *r;
+
+	l = strlen(s);
+	r = xallocc(l + 1);
+	for (i = 0; i < l; i++)
+		r[i] = tolower(s[i]);
+	r[l] = 0;
+
+	return r;
+}
+
 int main(int argc, char **argv)
 {
 	int do_load_balance;
 	const uint8_t hex_test[] = { 0, 1, 2, 3 };
 	struct sa_block oursa[1];
 	struct sa_block *s = oursa;
+	const char *group_id;
 
 	test_pack_unpack();
 #if defined(__CYGWIN__)
@@ -3748,6 +3764,11 @@ int main(int argc, char **argv)
 	s->ike.timeout = 1000; /* 1 second */
 
 	do_config(argc, argv);
+
+	if (opt_vendor == VENDOR_NORTEL)
+		group_id = tolowercase(config[CONFIG_IPSEC_ID]);
+	else
+		group_id = config[CONFIG_IPSEC_ID];
 	
 	DEBUG(1, printf("\nvpnc version " VERSION "\n"));
 	hex_dump("hex_test", hex_test, sizeof(hex_test), NULL);
@@ -3765,7 +3786,7 @@ int main(int argc, char **argv)
 	do_load_balance = 0;
 	do {
 		DEBUGTOP(2, printf("S4 do_phase1\n"));
-		do_phase1(config[CONFIG_IPSEC_ID], config[CONFIG_IPSEC_SECRET], s);
+		do_phase1(group_id, config[CONFIG_IPSEC_SECRET], s);
 		DEBUGTOP(2, printf("S5 do_phase2_xauth\n"));
 
 		if (opt_vendor == VENDOR_NORTEL) {
@@ -3789,6 +3810,8 @@ int main(int argc, char **argv)
 	close_tunnel();
 	DEBUGTOP(2, printf("S9 cleanup\n"));
 	cleanup(s);
+	if (opt_vendor == VENDOR_NORTEL)
+		free((void *)group_id);
 
 	return 0;
 }
