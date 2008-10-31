@@ -381,6 +381,7 @@ struct isakmp_payload *dup_isakmp_payload(struct isakmp_payload *p)
 		np->u.sa.proposals = dup_isakmp_payload(np->u.sa.proposals);
 		break;
 	case ISAKMP_PAYLOAD_P:
+		np->u.p.spi = dup_data(np->u.p.spi, np->u.p.spi_size);
 		np->u.p.transforms = dup_isakmp_payload(np->u.p.transforms);
 		break;
 	case ISAKMP_PAYLOAD_T:
@@ -405,6 +406,7 @@ struct isakmp_payload *dup_isakmp_payload(struct isakmp_payload *p)
 	case ISAKMP_PAYLOAD_N:
 		np->u.n.spi = dup_data(np->u.n.spi, np->u.n.spi_length);
 		np->u.n.data = dup_data(np->u.n.data, np->u.n.data_length);
+		np->u.n.attributes = dup_isakmp_attributes(np->u.n.attributes);
 		break;
 	case ISAKMP_PAYLOAD_D:
 		if (np->u.d.spi) {
