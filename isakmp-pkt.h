@@ -127,7 +127,7 @@ struct isakmp_packet {
 };
 
 extern void *xallocc(size_t x);
-extern void *dup_data(void *data, size_t x);
+extern void *dup_data(const void *data, size_t x);
 extern struct isakmp_packet *new_isakmp_packet(void);
 extern struct isakmp_payload *new_isakmp_payload(uint8_t);
 extern struct isakmp_payload *new_isakmp_data_payload(uint8_t type, const void *data,

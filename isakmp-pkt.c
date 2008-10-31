@@ -40,7 +40,7 @@ void *xallocc(size_t x)
 	return result;
 }
 
-void *dup_data(void *data, size_t x)
+void *dup_data(const void *data, size_t x)
 {
 	void *newdata = xallocc(x);
 	memcpy(newdata, data, x);
