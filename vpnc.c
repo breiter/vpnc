@@ -3108,8 +3108,6 @@ static void setup_link(struct sa_block *s)
 			DEBUGTOP(2, printf("S7.3 QM_packet2 validate type\n"));
 			reject = unpack_verify_phase2(s, r_packet, r_length, &r, nonce_i, sizeof(nonce_i));
 
-			/* FIXME: LEAK: r not freed */
-
 			if (((reject == 0) || (reject == ISAKMP_N_AUTHENTICATION_FAILED))
 				&& r->exchange_type == ISAKMP_EXCHANGE_INFORMATIONAL) {
 				DEBUGTOP(2, printf("S7.4 process and skip lifetime notice\n"));
@@ -3147,6 +3145,7 @@ static void setup_link(struct sa_block *s)
 				free(p_flat);
 			if (realiv)
 				free(realiv);
+			free_isakmp_packet(r);
 			break;
 		}
 
