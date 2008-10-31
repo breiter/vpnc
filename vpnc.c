@@ -3022,6 +3022,8 @@ static void do_phase2(struct sa_block *s)
 		rp->next->next->next = idci;
 	}
 
+	s->ipsec.life.start = time(NULL);
+
 	/* send final packet S7.7 QM_packet3 sent - run script */
 	sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_IKE_QUICK,
 		r->message_id, 0, 0, 0, nonce_r->u.nonce.data, nonce_r->u.nonce.length,0,0);
