@@ -266,6 +266,8 @@ void flatten_isakmp_packet(struct isakmp_packet *p, uint8_t ** result, size_t * 
 	flow_4(&f, p->message_id);
 	lpos = flow_reserve(&f, 4);
 	flow_payload(&f, p->payload);
+	if (p->extra_data_length && p->extra_data)
+		flow_x(&f, p->extra_data, p->extra_data_length);
 	if (p->flags & ISAKMP_FLAG_E) {
 		assert(blksz != 0);
 		sz = (f.end - f.base) - ISAKMP_PAYLOAD_O;
@@ -491,6 +493,7 @@ void free_isakmp_packet(struct isakmp_packet *p)
 {
 	if (p == NULL)
 		return;
+	free(p->extra_data);
 	free_isakmp_payload(p->payload);
 	free(p);
 }
@@ -946,6 +949,14 @@ struct isakmp_packet *parse_isakmp_packet(const uint8_t * data, size_t data_len,
 	r->payload = parse_isakmp_payload(payload, &data, &data_len, &reason, 0);
 	if (reason != 0)
 		goto error;
+
+	if (data_len) {
+		r->extra_data_length = data_len;
+		r->extra_data = dup_data(data, data_len);
+		data += data_len;
+		data_len = 0;
+		hex_dump("extra data", r->extra_data, r->extra_data_length, NULL);
+	}
 
 	DEBUG(3, printf("PARSE_OK\n"));
 	return r;
