@@ -2261,9 +2261,9 @@ static int do_phase2_xauth(struct sa_block *s)
 			break;
 
 		if (opt_vendor == VENDOR_NORTEL) {
-			if (reject == 0 && r->payload->next->u.modecfg.type == 5)
+			if (reject == 0 && r->payload->next->u.modecfg.type == ISAKMP_MODECFG_CFG_NORTEL_OK)
 				break;
-			if (reject == 0 && r->payload->next->u.modecfg.type == 6)
+			if (reject == 0 && r->payload->next->u.modecfg.type == ISAKMP_MODECFG_CFG_NORTEL_ERR)
 			{
 				printf("authentication failed\n");
 				break;
