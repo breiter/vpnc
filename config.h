@@ -37,6 +37,7 @@ enum config_enum {
 	CONFIG_PID_FILE,
 	CONFIG_LOCAL_ADDR,
 	CONFIG_LOCAL_PORT,
+	CONFIG_NORTEL_CLIENT_ID,
 	CONFIG_VERSION,
 	CONFIG_IF_NAME,
 	CONFIG_IF_MODE,
@@ -102,6 +103,7 @@ extern int opt_1des, opt_no_encryption, opt_auth_mode;
 extern enum natt_mode_enum opt_natt_mode;
 extern enum if_mode_enum opt_if_mode;
 extern uint16_t opt_udpencapport;
+extern uint16_t opt_nortel_client_id;
 
 #define TIMESTAMP() ({				\
 	char st[20];				\

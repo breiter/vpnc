@@ -1076,8 +1076,8 @@ static struct isakmp_attribute *make_transform_ike(int dh_group, int crypt, int 
 {
 	struct isakmp_attribute *a = NULL;
 	if (opt_vendor == VENDOR_NORTEL) {
-		a = new_isakmp_attribute_16(IKE_ATTRIB_NORTEL_UNKNOWN,
-			NORTEL_UNKNOWN_10, a);
+		a = new_isakmp_attribute_16(IKE_ATTRIB_NORTEL_CLIENT_ID,
+			opt_nortel_client_id, a);
 	} else {
 		a = new_isakmp_attribute(IKE_ATTRIB_LIFE_DURATION, a);
 		a->af = isakmp_attr_lots;
@@ -1438,7 +1438,7 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 							break;
 						case IKE_ATTRIB_LIFE_DURATION:
 							/* already processed above in IKE_ATTRIB_LIFE_TYPE: */
-						case IKE_ATTRIB_NORTEL_UNKNOWN:
+						case IKE_ATTRIB_NORTEL_CLIENT_ID:
 							break;
 						default:
 							DEBUG(1, printf
@@ -2313,6 +2313,8 @@ static int do_phase2_xauth(struct sa_block *s)
 			case ISAKMP_XAUTH_06_ATTRIB_NEXT_PIN:
 			case ISAKMP_XAUTH_02_ATTRIB_NEXT_PIN:
 			case ISAKMP_XAUTH_ATTRIB_CISCOEXT_VENDOR:
+			case ISAKMP_MODECFG_ATTRIB_NORTEL_UNKNOWN_4011:
+			case ISAKMP_MODECFG_ATTRIB_NORTEL_CLIENT_ID:
 				break;
 			case ISAKMP_XAUTH_06_ATTRIB_MESSAGE:
 			case ISAKMP_XAUTH_02_ATTRIB_MESSAGE:
@@ -2356,6 +2358,17 @@ static int do_phase2_xauth(struct sa_block *s)
 						na->u.lots.length);
 					break;
 				}
+			case ISAKMP_MODECFG_ATTRIB_NORTEL_UNKNOWN_4011:
+				reply_attr = new_isakmp_attribute_16(ISAKMP_MODECFG_ATTRIB_NORTEL_UNKNOWN_4011, 0, reply_attr);
+				break;
+			case ISAKMP_MODECFG_ATTRIB_NORTEL_CLIENT_ID:
+				/* e.g. "Netlock Contivity Client  3.3     Linux           " */
+				reply_attr = new_isakmp_attribute(ISAKMP_MODECFG_ATTRIB_NORTEL_CLIENT_ID, reply_attr);
+				reply_attr->af = isakmp_attr_lots;
+				reply_attr->u.lots.length = strlen(config[CONFIG_VERSION]);
+				reply_attr->u.lots.data = xallocc(reply_attr->u.lots.length);
+				memcpy(reply_attr->u.lots.data, config[CONFIG_VERSION], reply_attr->u.lots.length);
+				break;
 			case ISAKMP_XAUTH_06_ATTRIB_USER_NAME:
 			case ISAKMP_XAUTH_02_ATTRIB_USER_NAME:
 				{

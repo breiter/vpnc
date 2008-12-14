@@ -45,6 +45,7 @@ enum natt_mode_enum opt_natt_mode;
 enum vendor_enum opt_vendor;
 enum if_mode_enum opt_if_mode;
 uint16_t opt_udpencapport;
+uint16_t opt_nortel_client_id;
 
 void hex_dump(const char *str, const void *data, ssize_t len, const struct debug_strings *decode)
 {
@@ -159,6 +160,11 @@ static const char *config_ca_dir(void)
 static const char *config_def_auth_mode(void)
 {
 	return "psk";
+}
+
+static const char *config_def_nortel_client_id(void)
+{
+	return "V04_15";
 }
 
 static const char *config_def_app_version(void)
@@ -328,6 +334,14 @@ static const struct config_names_s {
 		NULL,
 		"enables using no encryption for data traffic (key exchanged must be encrypted)",
 		NULL
+	}, {
+		CONFIG_NORTEL_CLIENT_ID, 1, 1,
+		"--nortel-client-id",
+		"Nortel Client ID ",
+		"<list/0-65535/ASCII string>",
+		"Nortel Client version ID sent during connection.\n"
+		"Use \"list\" to print allowed values.",
+		config_def_nortel_client_id
 	}, {
 		CONFIG_VERSION, 1, 1,
 		"--application-version",
@@ -729,6 +743,45 @@ void do_config(int argc, char **argv)
 		} else {
 			printf("%s: unknown interface mode %s\nknown modes: tun tap\n", argv[0], config[CONFIG_IF_MODE]);
 			exit(1);
+		}
+
+		if (!strcmp(config[CONFIG_NORTEL_CLIENT_ID], "list")) {
+			const struct debug_strings *p;
+			printf("vpnc: Valid values for Nortel Client version ID:\n"
+				"  Integers in the range:\n  - <0-65535>\n"
+				"  and following strings, equivalent to value in brackets:\n");
+			for (p = ike_nortel_client_id_enum_array ; p->string ; p++)
+				printf("  - \"%.*s\"\t(%d)\n", strlen(p->string) - 17, p->string + 16, p->id);
+			exit(0);
+		}
+
+		if (config[CONFIG_NORTEL_CLIENT_ID][0] == 'V') {
+			char *s;
+			const struct debug_strings *p;
+			asprintf(&s, " (NORTEL_CLIENT_%s)", config[CONFIG_NORTEL_CLIENT_ID]);
+			for (p = ike_nortel_client_id_enum_array ; p->string ; p++)
+				if (!strcmp(s, p->string)) {
+					opt_nortel_client_id = p->id;
+					break;
+				}
+			if (!p->string) {
+				printf("%s: invalid [1] Nortel Client version ID %s\n"
+					" To list valid values, run \"%s --nortel-client id list\"\n",
+					argv[0], config[CONFIG_NORTEL_CLIENT_ID], argv[0]);
+				exit(1);
+			}
+		} else {
+			long int tmp;
+			char *endptr;
+			tmp = strtol(config[CONFIG_NORTEL_CLIENT_ID], &endptr, 0);
+			if (endptr == config[CONFIG_NORTEL_CLIENT_ID] ||
+				tmp < 0 || tmp > 65535) {
+				printf("%s: invalid [2] Nortel Client version ID %s\n"
+					" To list valid values, run \"%s --nortel-client id list\"\n",
+					argv[0], config[CONFIG_NORTEL_CLIENT_ID], argv[0]);
+				exit(1);
+			}
+			opt_nortel_client_id = tmp;
 		}
 
 		if (!strcmp(config[CONFIG_VENDOR], "cisco")) {

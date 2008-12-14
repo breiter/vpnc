@@ -534,12 +534,13 @@ static const struct debug_strings *attr_val_to_debug_strings(enum isakmp_ipsec_p
 	switch (decode_proto) {
 	case ISAKMP_IPSEC_PROTO_ISAKMP:
 		switch (type) {
-		case IKE_ATTRIB_ENC:         return ike_enc_enum_array;
-		case IKE_ATTRIB_HASH:        return ike_hash_enum_array;
-		case IKE_ATTRIB_AUTH_METHOD: return ike_auth_enum_array;
-		case IKE_ATTRIB_GROUP_DESC:  return ike_group_enum_array;
-		case IKE_ATTRIB_GROUP_TYPE:  return ike_group_type_enum_array;
-		case IKE_ATTRIB_LIFE_TYPE:   return ike_life_enum_array;
+		case IKE_ATTRIB_ENC:              return ike_enc_enum_array;
+		case IKE_ATTRIB_HASH:             return ike_hash_enum_array;
+		case IKE_ATTRIB_AUTH_METHOD:      return ike_auth_enum_array;
+		case IKE_ATTRIB_GROUP_DESC:       return ike_group_enum_array;
+		case IKE_ATTRIB_GROUP_TYPE:       return ike_group_type_enum_array;
+		case IKE_ATTRIB_LIFE_TYPE:        return ike_life_enum_array;
+		case IKE_ATTRIB_NORTEL_CLIENT_ID: return ike_nortel_client_id_enum_array;
 		default:  return NULL;
 		}
 	case ISAKMP_IPSEC_PROTO_IPSEC_AH:
