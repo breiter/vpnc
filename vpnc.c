@@ -945,6 +945,8 @@ static int do_config_to_env(struct sa_block *s, struct isakmp_attribute *a)
 			break;
 
 		case ISAKMP_MODECFG_ATTRIB_CISCO_DEF_DOMAIN:
+		case ISAKMP_MODECFG_ATTRIB_NORTEL_DEF_DOMAIN_A:
+		case ISAKMP_MODECFG_ATTRIB_NORTEL_DEF_DOMAIN_B:
 			if (a->af != isakmp_attr_lots) {
 				reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
 				break;
