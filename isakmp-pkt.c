@@ -639,6 +639,20 @@ static struct isakmp_attribute *parse_isakmp_attributes(const uint8_t ** data_p,
 				hex_dump("t.attributes.u.acl.sport", &r->u.acl.acl_ent[i].sport, DUMP_UINT16, NULL);
 				hex_dump("t.attributes.u.acl.dport", &r->u.acl.acl_ent[i].dport, DUMP_UINT16, NULL);
 			}
+		} else if (r->type == ISAKMP_MODECFG_ATTRIB_NORTEL_SPLIT_INC) {
+			r->af = isakmp_attr_acl;
+			r->u.acl.count = length / (4 + 4);
+			if (r->u.acl.count * (4 + 4) != length) {
+				*reject = ISAKMP_N_PAYLOAD_MALFORMED;
+				return r;
+			}
+			r->u.acl.acl_ent = xallocc(r->u.acl.count * sizeof(struct acl_ent_s));
+			for (i = 0; i < r->u.acl.count; i++) {
+				fetchn(&r->u.acl.acl_ent[i].addr.s_addr, 4);
+				fetchn(&r->u.acl.acl_ent[i].mask.s_addr, 4);
+				hex_dump("t.attributes.u.acl.addr", &r->u.acl.acl_ent[i].addr.s_addr, 4, NULL);
+				hex_dump("t.attributes.u.acl.mask", &r->u.acl.acl_ent[i].mask.s_addr, 4, NULL);
+			}
 		} else {
 			r->u.lots.data = xallocc(length);
 			fetchn(r->u.lots.data, length);

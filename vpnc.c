@@ -996,6 +996,7 @@ static int do_config_to_env(struct sa_block *s, struct isakmp_attribute *a)
 			break;
 
 		case ISAKMP_MODECFG_ATTRIB_CISCO_SPLIT_INC:
+		case ISAKMP_MODECFG_ATTRIB_NORTEL_SPLIT_INC:
 			if (a->af != isakmp_attr_acl) {
 				reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
 				break;
