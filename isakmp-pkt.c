@@ -639,7 +639,8 @@ static struct isakmp_attribute *parse_isakmp_attributes(const uint8_t ** data_p,
 				hex_dump("t.attributes.u.acl.sport", &r->u.acl.acl_ent[i].sport, DUMP_UINT16, NULL);
 				hex_dump("t.attributes.u.acl.dport", &r->u.acl.acl_ent[i].dport, DUMP_UINT16, NULL);
 			}
-		} else if (r->type == ISAKMP_MODECFG_ATTRIB_NORTEL_SPLIT_INC) {
+		} else if ((r->type == ISAKMP_MODECFG_ATTRIB_NORTEL_SPLIT_INC)
+				|| (r->type == ISAKMP_MODECFG_ATTRIB_NORTEL_SPLIT_INV)) {
 			r->af = isakmp_attr_acl;
 			r->u.acl.count = length / (4 + 4);
 			if (r->u.acl.count * (4 + 4) != length) {
