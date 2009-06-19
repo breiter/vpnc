@@ -159,7 +159,7 @@ static const char *config_ca_dir(void)
 
 static const char *config_def_auth_mode(void)
 {
-	return "psk";
+	return "default";
 }
 
 static const char *config_def_nortel_client_id(void)
@@ -245,6 +245,13 @@ static const struct config_names_s {
 		"Xauth username ",
 		"<ASCII string>",
 		"your username",
+		NULL
+	}, {
+		CONFIG_XAUTH_PIN, 1, 0,
+		NULL,
+		"Xauth PIN ",
+		"<ASCII string>",
+		"PIN for Nortel Two-Factor Authentication",
 		NULL
 	}, {
 		CONFIG_XAUTH_PASSWORD, 1, 0,
@@ -434,11 +441,17 @@ static const struct config_names_s {
 		CONFIG_AUTH_MODE, 1, 1,
 		"--auth-mode",
 		"IKE Authmode ",
-		"<psk/cert/hybrid>",
+		"<default/cert/psk/hybrid/username/token/PIN-token/token-SW/gpassword>",
 		"Authentication mode:\n"
-		" * psk:    pre-shared key (default)\n"
-		" * cert:   server + client certificate (not implemented yet)\n"
-		" * hybrid: server certificate + xauth (if built with openssl support)\n",
+		" * default:   maps to vendor specific default mode\n"
+		" * cert:      server + client certificate (not implemented yet)\n"
+		" * psk:       Cisco pre-shared key (default for Cisco)\n"
+		" * hybrid:    Cisco server certificate + xauth (if built with openssl support)\n"
+		" * username:  Nortel User Name and Password Authentication\n"
+		" * token:     Nortel Group Security - Response Only Token - Use Passcode (default for Nortel)\n"
+		" * PIN-token: Nortel Group Security - Response Only Token - Use Two-Factor Card\n"
+		" * token-SW:  Nortel Group Security - Response Only Token - Use SoftID Software (not implemented yet)\n"
+		" * gpassword: Nortel Group Security - Group Password Authentication",
 		config_def_auth_mode
 	}, {
 		CONFIG_CA_FILE, 1, 1,
@@ -703,16 +716,79 @@ void do_config(int argc, char **argv)
 		opt_nd = (config[CONFIG_ND]) ? 1 : 0;
 		opt_1des = (config[CONFIG_ENABLE_1DES]) ? 1 : 0;
 
+		if (!strcmp(config[CONFIG_VENDOR], "cisco")) {
+			opt_vendor = VENDOR_CISCO;
+		} else if (!strcmp(config[CONFIG_VENDOR], "netscreen")) {
+			opt_vendor = VENDOR_NETSCREEN;
+		} else if (!strcmp(config[CONFIG_VENDOR], "nortel")) {
+			opt_vendor = VENDOR_NORTEL;
+		} else {
+			printf("%s: unknown vendor %s\nknown vendors: cisco netscreen nortel\n",
+				argv[0], config[CONFIG_VENDOR]);
+			exit(1);
+		}
+
 		if (!strcmp(config[CONFIG_AUTH_MODE], "psk")) {
 			opt_auth_mode = AUTH_MODE_PSK;
 		} else if (!strcmp(config[CONFIG_AUTH_MODE], "cert")) {
 			opt_auth_mode = AUTH_MODE_CERT;
 		} else if (!strcmp(config[CONFIG_AUTH_MODE], "hybrid")) {
 			opt_auth_mode = AUTH_MODE_HYBRID;
+		} else if (!strcmp(config[CONFIG_AUTH_MODE], "username")) {
+			opt_auth_mode = AUTH_MODE_NORTEL_USERNAME;
+		} else if (!strcmp(config[CONFIG_AUTH_MODE], "token")) {
+			opt_auth_mode = AUTH_MODE_NORTEL_TOKEN;
+		} else if (!strcmp(config[CONFIG_AUTH_MODE], "PIN-token")) {
+			opt_auth_mode = AUTH_MODE_NORTEL_PINTOKEN;
+		} else if (!strcmp(config[CONFIG_AUTH_MODE], "token-SW")) {
+			opt_auth_mode = AUTH_MODE_NORTEL_TOKENSW;
+		} else if (!strcmp(config[CONFIG_AUTH_MODE], "gpassword")) {
+			opt_auth_mode = AUTH_MODE_NORTEL_GPASSWORD;
+		} else if (!strcmp(config[CONFIG_AUTH_MODE], "default")) {
+			switch (opt_vendor) {
+				case VENDOR_NORTEL:
+					opt_auth_mode = AUTH_MODE_NORTEL_TOKEN;
+					break;
+				case VENDOR_NETSCREEN:
+				case VENDOR_CISCO:
+				default:
+					opt_auth_mode = AUTH_MODE_PSK;
+					break;
+			}
 		} else {
-			printf("%s: unknown authentication mode %s\nknown modes: psk cert hybrid\n", argv[0], config[CONFIG_AUTH_MODE]);
+			printf("%s: unknown authentication mode \"%s\"\nknown modes: "
+				"default/cert/psk/hybrid/username/token/PIN-token/token-SW/gpassword\n",
+				argv[0], config[CONFIG_AUTH_MODE]);
 			exit(1);
 		}
+
+		if (((opt_vendor == VENDOR_NORTEL) &&
+			((opt_auth_mode != AUTH_MODE_CERT) &&
+			 (opt_auth_mode != AUTH_MODE_NORTEL_USERNAME) &&
+			 (opt_auth_mode != AUTH_MODE_NORTEL_TOKEN) &&
+			 (opt_auth_mode != AUTH_MODE_NORTEL_PINTOKEN) &&
+			 (opt_auth_mode != AUTH_MODE_NORTEL_TOKENSW) &&
+			 (opt_auth_mode != AUTH_MODE_NORTEL_GPASSWORD))) ||
+		    ((opt_vendor == VENDOR_CISCO) &&
+			((opt_auth_mode != AUTH_MODE_CERT) &&
+			 (opt_auth_mode != AUTH_MODE_PSK) &&
+			 (opt_auth_mode != AUTH_MODE_HYBRID))) ||
+		    ((opt_vendor == VENDOR_NETSCREEN) &&
+			((opt_auth_mode != AUTH_MODE_CERT) &&
+			 (opt_auth_mode != AUTH_MODE_PSK) &&
+			 (opt_auth_mode != AUTH_MODE_HYBRID)))) {
+			printf("%s: Auth Mode \"%s\" not valid for Vendor \"%s\"\n",
+				argv[0], config[CONFIG_AUTH_MODE], config[CONFIG_VENDOR]);
+			exit(1);
+		}
+
+		if (opt_auth_mode == AUTH_MODE_CERT ||
+		    opt_auth_mode == AUTH_MODE_NORTEL_TOKENSW) {
+			printf("%s: unimplemented Auth Mode \"%s\"\n",
+				argv[0], config[CONFIG_AUTH_MODE]);
+			exit(1);
+		}
+
 #ifndef OPENSSL_GPL_VIOLATION
 		if (opt_auth_mode == AUTH_MODE_HYBRID ||
 			opt_auth_mode == AUTH_MODE_CERT) {
@@ -783,17 +859,6 @@ void do_config(int argc, char **argv)
 			}
 			opt_nortel_client_id = tmp;
 		}
-
-		if (!strcmp(config[CONFIG_VENDOR], "cisco")) {
-			opt_vendor = VENDOR_CISCO;
-		} else if (!strcmp(config[CONFIG_VENDOR], "netscreen")) {
-			opt_vendor = VENDOR_NETSCREEN;
-		} else if (!strcmp(config[CONFIG_VENDOR], "nortel")) {
-			opt_vendor = VENDOR_NORTEL;
-		} else {
-			printf("%s: unknown vendor %s\nknown vendors: cisco netscreen nortel\n", argv[0], config[CONFIG_VENDOR]);
-			exit(1);
-		}
 	}
 
 	if (opt_debug >= 99) {
@@ -809,6 +874,12 @@ void do_config(int argc, char **argv)
 		if (config[i] != NULL || config[CONFIG_NON_INTERACTIVE] != NULL)
 			continue;
 		if (config[CONFIG_XAUTH_INTERACTIVE] && i == CONFIG_XAUTH_PASSWORD)
+			continue;
+		if (opt_auth_mode == AUTH_MODE_NORTEL_USERNAME
+		    && (i == CONFIG_XAUTH_USERNAME || i == CONFIG_XAUTH_PASSWORD))
+			continue;
+		if (opt_auth_mode != AUTH_MODE_NORTEL_PINTOKEN
+		    && i == CONFIG_XAUTH_PIN)
 			continue;
 
 		s = NULL;
@@ -828,6 +899,11 @@ void do_config(int argc, char **argv)
 		case CONFIG_XAUTH_USERNAME:
 			printf("Enter username for %s: ", config[CONFIG_IPSEC_GATEWAY]);
 			break;
+		case CONFIG_XAUTH_PIN:
+			printf("Enter PIN for %s@%s: ",
+				config[CONFIG_XAUTH_USERNAME],
+				config[CONFIG_IPSEC_GATEWAY]);
+			break;
 		case CONFIG_XAUTH_PASSWORD:
 			printf("Enter password for %s@%s: ",
 				config[CONFIG_XAUTH_USERNAME],
@@ -839,6 +915,7 @@ void do_config(int argc, char **argv)
 		fflush(stdout);
 		switch (i) {
 		case CONFIG_IPSEC_SECRET:
+		case CONFIG_XAUTH_PIN:
 		case CONFIG_XAUTH_PASSWORD:
 			s = strdup(getpass(""));
 			break;
@@ -870,10 +947,14 @@ void do_config(int argc, char **argv)
 		error(1, 0, "missing IPSec ID");
 	if (!config[CONFIG_IPSEC_SECRET])
 		error(1, 0, "missing IPSec secret");
-	if (!config[CONFIG_XAUTH_USERNAME])
-		error(1, 0, "missing Xauth username");
-	if (!config[CONFIG_XAUTH_PASSWORD] && !config[CONFIG_XAUTH_INTERACTIVE])
-		error(1, 0, "missing Xauth password");
+	if (opt_auth_mode != AUTH_MODE_NORTEL_USERNAME) {
+		if (!config[CONFIG_XAUTH_USERNAME])
+			error(1, 0, "missing Xauth username");
+		if (!config[CONFIG_XAUTH_PASSWORD] && !config[CONFIG_XAUTH_INTERACTIVE])
+			error(1, 0, "missing Xauth password");
+	}
+	if (opt_auth_mode == AUTH_MODE_NORTEL_PINTOKEN && !config[CONFIG_XAUTH_PIN])
+		error(1, 0, "missing Xauth PIN");
 	if (get_dh_group_ike() == NULL)
 		error(1, 0, "IKE DH Group \"%s\" unsupported\n", config[CONFIG_IKE_DH]);
 	if (get_dh_group_ipsec(-1) == NULL)

@@ -1117,17 +1117,10 @@ static struct isakmp_payload *make_our_sa_ike(void)
 	r->u.sa.proposals->u.p.prot_id = ISAKMP_IPSEC_PROTO_ISAKMP;
 
 	if (opt_vendor == VENDOR_NORTEL) {
-	auth = 0;
+		auth = 0;
 		if ((opt_auth_mode == AUTH_MODE_CERT) &&
 	        (supp_auth[auth].ike_sa_id != IKE_AUTH_RSA_SIG) &&
 			(supp_auth[auth].ike_sa_id != IKE_AUTH_DSS)) {
-		} else if ((opt_auth_mode == AUTH_MODE_HYBRID) &&
-		    (supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitRSA) &&
-			(supp_auth[auth].ike_sa_id != IKE_AUTH_HybridInitDSS)) {
-		} else if (supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitRSA ||
-			supp_auth[auth].ike_sa_id == IKE_AUTH_HybridInitDSS ||
-			supp_auth[auth].ike_sa_id == IKE_AUTH_RSA_SIG ||
-			supp_auth[auth].ike_sa_id == IKE_AUTH_DSS) {
 		} else {
 			for (crypt = 0; supp_crypt[crypt].name != NULL; crypt++) {
 				keylen = supp_crypt[crypt].keylen;
@@ -1291,7 +1284,10 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 		l->u.id.protocol = IPPROTO_UDP;
 		l->u.id.port = ISAKMP_PORT; /* this must be 500, see rfc2407, 4.6.2 */
 		if (opt_vendor == VENDOR_NORTEL) {
-			l->u.id.length = 24;
+			if (opt_auth_mode == AUTH_MODE_NORTEL_USERNAME)
+				l->u.id.length = 20;
+			else
+				l->u.id.length = 24;
 			l->u.id.data = xallocc(l->u.id.length);
 			gcry_md_hash_buffer(GCRY_MD_SHA1, l->u.id.data, key_id, strlen(key_id));
 			/* memcpy(l->u.id.data, key_id, strlen(key_id)); */
@@ -1636,7 +1632,10 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 			reject = ISAKMP_N_INVALID_ID_INFORMATION;
 
 		/* Decide if signature or hash is expected (sig only if vpnc is initiator of hybrid-auth */
-		if (reject == 0 && opt_auth_mode == AUTH_MODE_PSK && (hash == NULL || hash->u.hash.length != s->ike.md_len))
+		if (reject == 0 &&
+			((opt_auth_mode == AUTH_MODE_PSK) ||
+			 (opt_vendor == VENDOR_NORTEL && opt_auth_mode != AUTH_MODE_CERT)) &&
+			(hash == NULL || hash->u.hash.length != s->ike.md_len))
 			reject = ISAKMP_N_INVALID_HASH_INFORMATION;
 		if (reject == 0 && sig == NULL &&
 			(opt_auth_mode == AUTH_MODE_CERT ||
@@ -1751,7 +1750,8 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 			expected_hash = gcry_md_read(hm, 0);
 			hex_dump("expected hash", expected_hash, s->ike.md_len, NULL);
 
-			if (opt_auth_mode == AUTH_MODE_PSK) {
+			if ((opt_auth_mode == AUTH_MODE_PSK) ||
+				(opt_vendor == VENDOR_NORTEL && opt_auth_mode != AUTH_MODE_CERT)) {
 				if (memcmp(expected_hash, hash->u.hash.data, s->ike.md_len) != 0)
 					error(2, 0, "hash comparison failed: %s(%d)\ncheck group password!",
 						val_to_string(ISAKMP_N_AUTHENTICATION_FAILED, isakmp_notify_enum_array),
@@ -2235,7 +2235,6 @@ static int do_phase2_xauth(struct sa_block *s)
 	DEBUGTOP(2, printf("S5.1 xauth_start\n"));
 	/* This can go around for a while.  */
 	for (loopcount = 0;; loopcount++) {
-		uint16_t xauth_type_requested = 5;
 		struct isakmp_payload *rp;
 		struct isakmp_attribute *a, *ap, *reply_attr;
 		char ntop_buf[32];
@@ -2350,6 +2349,12 @@ static int do_phase2_xauth(struct sa_block *s)
 		reply_attr = NULL;
 		for (ap = a; ap && reject == 0; ap = ap->next)
 			switch (ap->type) {
+			case ISAKMP_XAUTH_02_ATTRIB_TYPE:
+				if (opt_auth_mode == AUTH_MODE_NORTEL_GPASSWORD)
+					reply_attr = new_isakmp_attribute_16(ISAKMP_XAUTH_02_ATTRIB_TYPE, ISAKMP_MODECFG_TYPE_RADIUS, reply_attr);
+				else
+					reply_attr = new_isakmp_attribute_16(ISAKMP_XAUTH_02_ATTRIB_TYPE, ISAKMP_MODECFG_TYPE_SECURID, reply_attr);
+				break;
 			case ISAKMP_XAUTH_06_ATTRIB_DOMAIN:
 			case ISAKMP_XAUTH_02_ATTRIB_DOMAIN:
 				{
@@ -2423,26 +2428,33 @@ static int do_phase2_xauth(struct sa_block *s)
 					memset(pass, 0, na->u.lots.length);
 				} else {
 					struct isakmp_attribute *na;
-					if (opt_vendor == VENDOR_NORTEL) {
-						na = reply_attr->next = new_isakmp_attribute(ISAKMP_XAUTH_02_ATTRIB_PASSCODE, /* reply_attr */ NULL);
-					} else {
+					if (opt_vendor == VENDOR_NORTEL
+					    && opt_auth_mode != AUTH_MODE_NORTEL_GPASSWORD)
+						na = new_isakmp_attribute(ISAKMP_XAUTH_02_ATTRIB_PASSCODE, reply_attr);
+					else
 						na = new_isakmp_attribute(ap->type, reply_attr);
-						reply_attr = na;
+					reply_attr = na;
+					if (opt_vendor == VENDOR_NORTEL
+					    && opt_auth_mode == AUTH_MODE_NORTEL_PINTOKEN) {
+						int l_pin, l_pas;
+						l_pin = strlen(config[CONFIG_XAUTH_PIN]);
+						l_pas = strlen(config[CONFIG_XAUTH_PASSWORD]);
+						na->u.lots.length = l_pin + l_pas;
+						na->u.lots.data = xallocc(na->u.lots.length);
+						memcpy(na->u.lots.data, config[CONFIG_XAUTH_PIN], l_pin);
+						memcpy(na->u.lots.data + l_pin, config[CONFIG_XAUTH_PASSWORD], l_pas);
+					} else {
+						na->u.lots.length = strlen(config[CONFIG_XAUTH_PASSWORD]);
+						na->u.lots.data = xallocc(na->u.lots.length);
+						memcpy(na->u.lots.data, config[CONFIG_XAUTH_PASSWORD],
+							na->u.lots.length);
 					}
-					na->u.lots.length = strlen(config[CONFIG_XAUTH_PASSWORD]);
-					na->u.lots.data = xallocc(na->u.lots.length);
-					memcpy(na->u.lots.data, config[CONFIG_XAUTH_PASSWORD],
-						na->u.lots.length);
 					passwd_used = 1; /* Provide canned password at most once */
 				}
 				break;
 			default:
 				;
 			}
-
-		if (opt_vendor == VENDOR_NORTEL) {
-			reply_attr = new_isakmp_attribute_16(ISAKMP_XAUTH_02_ATTRIB_TYPE, xauth_type_requested, reply_attr);
-		}
 
 		/* Send the response.  */
 		rp = new_isakmp_payload(ISAKMP_PAYLOAD_MODECFG_ATTR);
@@ -2558,7 +2570,8 @@ static int do_phase2_config(struct sa_block *s)
 		rp->u.modecfg.attributes = a;
 		sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_MODECFG_TRANSACTION, msgid, 0, 0, 0, 0, 0, 0, 0);
 	} else {
-		r_length = sendrecv(s,r_packet, sizeof(r_packet), NULL, 0, 0);
+		if (opt_auth_mode != AUTH_MODE_NORTEL_USERNAME)
+			r_length = sendrecv(s,r_packet, sizeof(r_packet), NULL, 0, 0);
 	}
 
 	/* recv and check for notices */
@@ -3809,21 +3822,26 @@ int main(int argc, char **argv)
 	do {
 		DEBUGTOP(2, printf("S4 do_phase1\n"));
 		do_phase1(group_id, config[CONFIG_IPSEC_SECRET], s);
-		DEBUGTOP(2, printf("S5 do_phase2_xauth\n"));
 
 		if (opt_vendor == VENDOR_NORTEL) {
-			do_load_balance = do_phase2_xauth(s);
-			DEBUGTOP(2, printf("S6 do_phase2_config\n"));
+			if (opt_auth_mode != AUTH_MODE_NORTEL_USERNAME) {
+				DEBUGTOP(2, printf("S5 do_phase2_xauth [1]\n"));
+				do_load_balance = do_phase2_xauth(s);
+			}
+			DEBUGTOP(2, printf("S6 do_phase2_config [1]\n"));
 			do_load_balance = do_phase2_config(s);
 			DEBUGTOP(2, printf("S6 do_phase2\n"));
 			do_phase2(s);
 		} else {
 			/* FIXME: Create and use a generic function in supp.[hc] */
-			if (s->ike.auth_algo >= IKE_AUTH_HybridInitRSA)
+			if (s->ike.auth_algo >= IKE_AUTH_HybridInitRSA) {
+				DEBUGTOP(2, printf("S5 do_phase2_xauth [2]\n"));
 				do_load_balance = do_phase2_xauth(s);
-			DEBUGTOP(2, printf("S6 do_phase2_config\n"));
-			if ((opt_vendor == VENDOR_CISCO || opt_vendor == VENDOR_NORTEL) && (do_load_balance == 0))
+			}
+			if ((opt_vendor == VENDOR_CISCO) && (do_load_balance == 0)) {
+				DEBUGTOP(2, printf("S6 do_phase2_config [2]\n"));
 				do_load_balance = do_phase2_config(s);
+			}
 		}
 	} while (do_load_balance);
 	DEBUGTOP(2, printf("S7 setup_link (phase 2 + main_loop)\n"));

@@ -49,6 +49,7 @@ enum config_enum {
 	CONFIG_IPSEC_SECRET,
 	CONFIG_IPSEC_SECRET_OBF,
 	CONFIG_XAUTH_USERNAME,
+	CONFIG_XAUTH_PIN,
 	CONFIG_XAUTH_PASSWORD,
 	CONFIG_XAUTH_PASSWORD_OBF,
 	CONFIG_XAUTH_INTERACTIVE,
@@ -87,11 +88,16 @@ enum if_mode_enum {
 };
 
 enum auth_mode_enum {
-	AUTH_MODE_PSK,
+	AUTH_MODE_PSK,                  /* pre-shared key */
 	AUTH_MODE_RSA1,
 	AUTH_MODE_RSA2,
-	AUTH_MODE_CERT,
-	AUTH_MODE_HYBRID
+	AUTH_MODE_CERT,                 /* Digital Certificate Authentication */
+	AUTH_MODE_HYBRID,               /* server certificate + xauth */
+	AUTH_MODE_NORTEL_USERNAME,      /* User Name and Password Authentication */
+	AUTH_MODE_NORTEL_TOKEN,         /* Group Security - Response Only Token - Use Passcode */
+	AUTH_MODE_NORTEL_PINTOKEN,      /* Group Security - Response Only Token - Use Two-Factor Card */
+	AUTH_MODE_NORTEL_TOKENSW,       /* Group Security - Response Only Token - Use SoftID Software */
+	AUTH_MODE_NORTEL_GPASSWORD      /* Group Security - Group Password Authentication */
 };
 
 extern const char *config[LAST_CONFIG];
