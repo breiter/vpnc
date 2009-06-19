@@ -1716,6 +1716,8 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 					gcry_md_final(skeyid_ctx);
 				} else
 					error(1, 0, "SKEYID could not be computed: %s", "the selected authentication method is not supported");
+				skeyid = gcry_md_read(skeyid_ctx, 0);
+				hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
 			} else {
 				skeyid = gcry_md_read(skeyid_ctx, 0);
 				hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
