@@ -1649,81 +1649,77 @@ static void do_phase1(const char *key_id, const char *shared_key, struct sa_bloc
 		dh_create_shared(dh_grp, dh_shared_secret, ke->u.ke.data);
 		hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(dh_grp), NULL);
 		/* Generate SKEYID.  */
-		{
+		if (opt_vendor == VENDOR_NORTEL) {
 			gcry_md_hd_t hm;
-			if (opt_vendor == VENDOR_NORTEL) {
-				char shared_key_sha1[20];
-				uint8_t *hmac;
+			char shared_key_sha1[20];
+			uint8_t *hmac;
 
-				gcry_md_hash_buffer(GCRY_MD_SHA1, shared_key_sha1, shared_key, strlen(shared_key));
+			gcry_md_hash_buffer(GCRY_MD_SHA1, shared_key_sha1, shared_key, strlen(shared_key));
 
-				gcry_md_open(&hm, GCRY_MD_SHA1, GCRY_MD_FLAG_HMAC);
-				gcry_md_setkey(hm, shared_key_sha1, sizeof(shared_key_sha1));
-				gcry_md_write(hm, key_id, strlen(key_id));
-				gcry_md_final(hm);
-				hmac = gcry_md_read(hm, 0);
+			gcry_md_open(&hm, GCRY_MD_SHA1, GCRY_MD_FLAG_HMAC);
+			gcry_md_setkey(hm, shared_key_sha1, sizeof(shared_key_sha1));
+			gcry_md_write(hm, key_id, strlen(key_id));
+			gcry_md_final(hm);
+			hmac = gcry_md_read(hm, 0);
 
-				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
-				gcry_md_setkey(skeyid_ctx, hmac, 20);
-			} else {
-				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
-				gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
-			}
-
+			gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+			gcry_md_setkey(skeyid_ctx, hmac, 20);
 			gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
 			gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
 			gcry_md_final(skeyid_ctx);
-			if (opt_vendor != VENDOR_NORTEL) {
-				psk_skeyid = xallocc(s->ike.md_len);
-				memcpy(psk_skeyid, gcry_md_read(skeyid_ctx, 0), s->ike.md_len);
-				if (opt_debug < 99)
-					DEBUG(3, printf("(not dumping psk hash)\n"));
-				else
-					hex_dump("psk_skeyid", psk_skeyid, s->ike.md_len, NULL);
-				free(psk_skeyid);
-				gcry_md_close(skeyid_ctx);
-				DEBUG(99, printf("shared-key: %s\n",shared_key));
+			skeyid = gcry_md_read(skeyid_ctx, 0);
+			hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
+			gcry_md_close(hm);
+		} else { /* opt_vendor != VENDOR_NORTEL */
+			gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+			gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
+			gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
+			gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
+			gcry_md_final(skeyid_ctx);
+			psk_skeyid = xallocc(s->ike.md_len);
+			memcpy(psk_skeyid, gcry_md_read(skeyid_ctx, 0), s->ike.md_len);
+			if (opt_debug < 99)
+				DEBUG(3, printf("(not dumping psk hash)\n"));
+			else
+				hex_dump("psk_skeyid", psk_skeyid, s->ike.md_len, NULL);
+			free(psk_skeyid);
+			gcry_md_close(skeyid_ctx);
+			DEBUG(99, printf("shared-key: %s\n",shared_key));
 
-				/* SKEYID - psk only */
-				if (s->ike.auth_algo == IKE_AUTH_PRESHARED ||
-					s->ike.auth_algo == IKE_AUTH_XAUTHInitPreShared ||
-					s->ike.auth_algo == IKE_AUTH_XAUTHRespPreShared) {
-					gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
-					gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
-					gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
-					gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
-					gcry_md_final(skeyid_ctx);
-				} else if (s->ike.auth_algo == IKE_AUTH_DSS ||
-					s->ike.auth_algo == IKE_AUTH_RSA_SIG ||
-					s->ike.auth_algo == IKE_AUTH_ECDSA_SIG ||
-					s->ike.auth_algo == IKE_AUTH_HybridInitRSA ||
-					s->ike.auth_algo == IKE_AUTH_HybridRespRSA ||
-					s->ike.auth_algo == IKE_AUTH_HybridInitDSS ||
-					s->ike.auth_algo == IKE_AUTH_HybridRespDSS ||
-					s->ike.auth_algo == IKE_AUTH_XAUTHInitDSS ||
-					s->ike.auth_algo == IKE_AUTH_XAUTHRespDSS ||
-					s->ike.auth_algo == IKE_AUTH_XAUTHInitRSA ||
-					s->ike.auth_algo == IKE_AUTH_XAUTHRespRSA) {
-					unsigned char *key;
-					int key_len;
-					key_len = sizeof(i_nonce) + nonce->u.nonce.length;
-					key = xallocc(key_len);
-					memcpy(key, i_nonce, sizeof(i_nonce));
-					memcpy(key + sizeof(i_nonce), nonce->u.nonce.data, nonce->u.nonce.length);
-					gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
-					gcry_md_setkey(skeyid_ctx, key, key_len);
-					gcry_md_write(skeyid_ctx, dh_shared_secret, dh_getlen(dh_grp));
-					gcry_md_final(skeyid_ctx);
-				} else
-					error(1, 0, "SKEYID could not be computed: %s", "the selected authentication method is not supported");
-				skeyid = gcry_md_read(skeyid_ctx, 0);
-				hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
-			} else {
-				skeyid = gcry_md_read(skeyid_ctx, 0);
-				hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
-			}
-			if (opt_vendor == VENDOR_NORTEL)
-				gcry_md_close(hm);
+			/* SKEYID - psk only */
+			if (s->ike.auth_algo == IKE_AUTH_PRESHARED ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHInitPreShared ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHRespPreShared) {
+				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+				gcry_md_setkey(skeyid_ctx, shared_key, strlen(shared_key));
+				gcry_md_write(skeyid_ctx, i_nonce, sizeof(i_nonce));
+				gcry_md_write(skeyid_ctx, nonce->u.nonce.data, nonce->u.nonce.length);
+				gcry_md_final(skeyid_ctx);
+			} else if (s->ike.auth_algo == IKE_AUTH_DSS ||
+				s->ike.auth_algo == IKE_AUTH_RSA_SIG ||
+				s->ike.auth_algo == IKE_AUTH_ECDSA_SIG ||
+				s->ike.auth_algo == IKE_AUTH_HybridInitRSA ||
+				s->ike.auth_algo == IKE_AUTH_HybridRespRSA ||
+				s->ike.auth_algo == IKE_AUTH_HybridInitDSS ||
+				s->ike.auth_algo == IKE_AUTH_HybridRespDSS ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHInitDSS ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHRespDSS ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHInitRSA ||
+				s->ike.auth_algo == IKE_AUTH_XAUTHRespRSA) {
+				unsigned char *key;
+				int key_len;
+				key_len = sizeof(i_nonce) + nonce->u.nonce.length;
+				key = xallocc(key_len);
+				memcpy(key, i_nonce, sizeof(i_nonce));
+				memcpy(key + sizeof(i_nonce), nonce->u.nonce.data, nonce->u.nonce.length);
+				gcry_md_open(&skeyid_ctx, s->ike.md_algo, GCRY_MD_FLAG_HMAC);
+				gcry_md_setkey(skeyid_ctx, key, key_len);
+				gcry_md_write(skeyid_ctx, dh_shared_secret, dh_getlen(dh_grp));
+				gcry_md_final(skeyid_ctx);
+			} else
+				error(1, 0, "SKEYID could not be computed: %s", "the selected authentication method is not supported");
+			skeyid = gcry_md_read(skeyid_ctx, 0);
+			hex_dump("skeyid", skeyid, s->ike.md_len, NULL);
 		}
 
 		/* Verify the hash.  */
