@@ -3078,9 +3078,9 @@ static void setup_link(struct sa_block *s)
 	struct group *dh_grp = NULL;
 	uint8_t nonce_i[20], *dh_public = NULL;
 	struct isakmp_payload *rp, *us, *ke = NULL, *them, *nonce_r = NULL;
+	struct isakmp_packet *r;
 
 	if (opt_vendor != VENDOR_NORTEL) {
-		struct isakmp_packet *r;
 		uint32_t msgid;
 		int reject;
 		uint8_t *p_flat = NULL, *realiv = NULL, realiv_msgid[4];
@@ -3141,8 +3141,6 @@ static void setup_link(struct sa_block *s)
 
 			DEBUGTOP(2, printf("S7.3 QM_packet2 validate type\n"));
 			reject = unpack_verify_phase2(s, r_packet, r_length, &r, nonce_i, sizeof(nonce_i));
-
-			/* FIXME: LEAK: r not freed */
 
 			if (((reject == 0) || (reject == ISAKMP_N_AUTHENTICATION_FAILED))
 				&& r->exchange_type == ISAKMP_EXCHANGE_INFORMATIONAL) {
@@ -3391,6 +3389,7 @@ static void setup_link(struct sa_block *s)
 				group_free(dh_grp);
 			if (dh_shared_secret)
 				free(dh_shared_secret);
+			free_isakmp_packet(r);
 		}
 
 		if ((opt_natt_mode == NATT_CISCO_UDP) && s->ipsec.peer_udpencap_port) {
