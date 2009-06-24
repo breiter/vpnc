@@ -2593,7 +2593,7 @@ static int do_phase2_config(struct sa_block *s)
 		if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
 			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
 	} else {
-		if (r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
+		if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
 			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
 	}
 
