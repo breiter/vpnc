@@ -2586,16 +2586,12 @@ static int do_phase2_config(struct sa_block *s)
 		return 1;
 	}
 
-	if (opt_vendor != VENDOR_NORTEL) {
-		/* Check the transaction type & message ID are OK.  */
+	/* Check the transaction type & message ID are OK.  */
+	if (opt_vendor != VENDOR_NORTEL)
 		if (reject == 0 && r->message_id != msgid)
 			reject = ISAKMP_N_INVALID_MESSAGE_ID;
-		if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
-			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
-	} else {
-		if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
-			reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
-	}
+	if (reject == 0 && r->exchange_type != ISAKMP_EXCHANGE_MODECFG_TRANSACTION)
+		reject = ISAKMP_N_INVALID_EXCHANGE_TYPE;
 
 	/* After the hash, expect an attribute block.  */
 
