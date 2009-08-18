@@ -155,7 +155,6 @@ const struct vid_element vid_list[] = {
 // These vars are in use by NORTELVPN
 static int ipsec_cry_algo, ipsec_hash_algo, dh_group;
 static uint16_t encap_mode = IPSEC_ENCAP_TUNNEL;
-uint8_t *tous_keys, *tothem_keys;
 static void phase2_fatal(struct sa_block *s, const char *msg, int id);
 
 
@@ -3064,11 +3063,11 @@ static void do_phase2(struct sa_block *s)
 
 	DEBUGTOP(2, printf("do_phase2: S7.7 QM_packet3 sent - run script\n"));
 
-	tous_keys = s->ipsec.rx.key = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->ipsec.rx.spi,
+	s->ipsec.rx.key = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->ipsec.rx.spi,
 		dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
 		nonce_r->u.nonce.data, nonce_r->u.nonce.length, nonce, sizeof(nonce));
 
-	tothem_keys = s->ipsec.tx.key = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->ipsec.tx.spi,
+	s->ipsec.tx.key = gen_keymat(s, ISAKMP_IPSEC_PROTO_IPSEC_ESP, s->ipsec.tx.spi,
 		dh_shared_secret, dh_grp ? dh_getlen(dh_grp) : 0,
 		nonce_r->u.nonce.data, nonce_r->u.nonce.length, nonce, sizeof(nonce));
 
