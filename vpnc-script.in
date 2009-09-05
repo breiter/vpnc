@@ -4,6 +4,8 @@
 #* TUNDEV                       -- tunnel device (always present)
 #* INTERNAL_IP4_ADDRESS         -- address (always present)
 #* INTERNAL_IP4_NETMASK         -- netmask (often unset)
+#* INTERNAL_IP4_NETMASKLEN      -- netmask length (often unset)
+#* INTERNAL_IP4_NETADDR         -- address of network (only present if netmask is set)
 #* INTERNAL_IP4_DNS             -- list of dns serverss
 #* INTERNAL_IP4_NBNS            -- list of wins servers
 #* CISCO_DEF_DOMAIN             -- default domain name
@@ -37,6 +39,7 @@
 # 1) Maybe dnsmasq can do something like that
 # 2) Parse dns packets going out via tunnel and redirect them to original dns-server
 
+#env | sort
 #set -x
 
 # =========== script (variable) setup ====================================
@@ -93,7 +96,12 @@ do_ifconfig() {
 		MTU=1412
 	fi
 
-	ifconfig "$TUNDEV" inet "$INTERNAL_IP4_ADDRESS" $ifconfig_syntax_ptp "$INTERNAL_IP4_ADDRESS" netmask ${INTERNAL_IP4_NETMASK:-255.255.255.255} mtu ${MTU} up
+	# Point to point interface require a netmask of 255.255.255.255 on some systems
+	ifconfig "$TUNDEV" inet "$INTERNAL_IP4_ADDRESS" $ifconfig_syntax_ptp "$INTERNAL_IP4_ADDRESS" netmask 255.255.255.255 mtu ${MTU} up
+
+	if [ -n "$INTERNAL_IP4_NETMASK" ]; then
+		set_network_route $INTERNAL_IP4_NETADDR $INTERNAL_IP4_NETMASK $INTERNAL_IP4_NETMASKLEN
+	fi
 }
 
 destroy_tun_device() {
@@ -465,7 +473,6 @@ do_connect() {
 }
 
 do_disconnect() {
-	destroy_tun_device
 	if [ -n "$CISCO_SPLIT_INC" ]; then
 		i=0
 		while [ $i -lt $CISCO_SPLIT_INC ] ; do
@@ -493,6 +500,7 @@ do_disconnect() {
 	if [ -n "$INTERNAL_IP4_DNS" ]; then
 		$RESTORERESOLVCONF
 	fi
+	destroy_tun_device
 }
 
 #### Main
