@@ -3110,7 +3110,7 @@ static void do_phase2_qm(struct sa_block *s)
 	if (opt_vendor != VENDOR_NORTEL) {
 		uint32_t msgid;
 		int reject;
-		uint8_t *p_flat = NULL, *realiv = NULL, realiv_msgid[4];
+		uint8_t *p_flat = NULL;
 		size_t p_size = 0;
 		int i;
 
@@ -3160,12 +3160,6 @@ static void do_phase2_qm(struct sa_block *s)
 			sendrecv_phase2(s, rp, ISAKMP_EXCHANGE_IKE_QUICK,
 				msgid, 0, &p_flat, &p_size, 0, 0, 0, 0);
 
-			if (realiv == NULL) {
-				realiv = xallocc(s->ike.ivlen);
-				memcpy(realiv, s->ike.current_iv, s->ike.ivlen);
-				memcpy(realiv_msgid, s->ike.current_iv_msgid, 4);
-			}
-
 			DEBUGTOP(2, printf("S7.3 QM_packet2 validate type\n"));
 			reject = unpack_verify_phase2(s, r_packet, r_length, &r, nonce_i, sizeof(nonce_i)); /* FIXME: LEAK */
 
@@ -3185,8 +3179,6 @@ static void do_phase2_qm(struct sa_block *s)
 						lifetime_ipsec_process(s, r->payload->next->u.n.attributes);
 					else
 						DEBUG(2, printf("got unknown lifetime notice, ignoring..\n"));
-					memcpy(s->ike.current_iv, realiv, s->ike.ivlen);
-					memcpy(s->ike.current_iv_msgid, realiv_msgid, 4);
 					continue;
 				}
 			}
@@ -3203,7 +3195,6 @@ static void do_phase2_qm(struct sa_block *s)
 				reject = ISAKMP_N_INVALID_PAYLOAD_TYPE;
 
 			free(p_flat);
-			free(realiv);
 
 			break;
 		}
