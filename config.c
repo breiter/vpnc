@@ -608,10 +608,10 @@ static void print_version(void)
 		"Public License.  For more information about these matters, see the files\n"
 		"named COPYING.\n");
 #ifdef OPENSSL_GPL_VIOLATION
-	printf("Built with openssl (certificate) support. Be aware of the\n"
+	printf("Built with openssl certificate support. Be aware of the\n"
 		"license implications.\n");
 #else /* OPENSSL_GPL_VIOLATION */
-	printf("Built without openssl (certificate) support.\n");
+	printf("Built with certificate support.\n");
 #endif /* OPENSSL_GPL_VIOLATION */
 	printf("\n");
 
@@ -789,13 +789,6 @@ void do_config(int argc, char **argv)
 			exit(1);
 		}
 
-#ifndef OPENSSL_GPL_VIOLATION
-		if (opt_auth_mode == AUTH_MODE_HYBRID ||
-			opt_auth_mode == AUTH_MODE_CERT) {
-			printf("%s was built without openssl: Can't do hybrid or cert mode.\n", argv[0]);
-			exit(1);
-		}
-#endif
 		opt_no_encryption = (config[CONFIG_ENABLE_NO_ENCRYPTION]) ? 1 : 0;
 		opt_udpencapport=atoi(config[CONFIG_UDP_ENCAP_PORT]);
 
