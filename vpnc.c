@@ -893,7 +893,7 @@ static uint8_t *gen_keymat(struct sa_block *s,
 }
 
 static int mask_to_masklen(struct in_addr mask)
-{ 
+{
 	int len;
 	uint32_t addr;
 
