@@ -833,6 +833,7 @@ void do_config(int argc, char **argv)
 					opt_nortel_client_id = p->id;
 					break;
 				}
+			free(s);
 			if (!p->string) {
 				printf("%s: invalid [1] Nortel Client version ID %s\n"
 					" To list valid values, run \"%s --nortel-client id list\"\n",
