@@ -79,7 +79,8 @@ enum natt_mode_enum {
 	NATT_NONE,
 	NATT_NORMAL,
 	NATT_FORCE,
-	NATT_CISCO_UDP
+	NATT_CISCO_UDP,
+	NATT_NORTEL_UDP
 };
 
 enum if_mode_enum {

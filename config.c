@@ -292,7 +292,7 @@ static const struct config_names_s {
 		CONFIG_NATT_MODE, 1, 1,
 		"--natt-mode",
 		"NAT Traversal Mode ",
-		"<natt/none/force-natt/cisco-udp>",
+		"<natt/none/force-natt/cisco-udp/nortel-udp>",
 		"Which NAT-Traversal Method to use:\n"
 		" * natt -- NAT-T as defined in RFC3947\n"
 		" * none -- disable use of any NAT-T method\n"
@@ -300,6 +300,7 @@ static const struct config_names_s {
 		"                 without presence of a NAT device\n"
 		"                 (useful if the OS captures all ESP traffic)\n"
 		" * cisco-udp -- Cisco proprietary UDP encapsulation, commonly over Port 10000\n"
+		" * nortel-udp -- Nortel proprietary UDP encapsulation\n"
 		"Note: cisco-tcp encapsulation is not yet supported\n",
 		config_def_natt_mode
 	}, {
@@ -800,8 +801,10 @@ void do_config(int argc, char **argv)
 			opt_natt_mode = NATT_FORCE;
 		} else if (!strcmp(config[CONFIG_NATT_MODE], "cisco-udp")) {
 			opt_natt_mode = NATT_CISCO_UDP;
+		} else if (!strcmp(config[CONFIG_NATT_MODE], "nortel-udp")) {
+			opt_natt_mode = NATT_NORTEL_UDP;
 		} else {
-			printf("%s: unknown nat traversal mode %s\nknown modes: natt none force-natt cisco-udp\n", argv[0], config[CONFIG_NATT_MODE]);
+			printf("%s: unknown nat traversal mode %s\nknown modes: natt none force-natt cisco-udp nortel-udp\n", argv[0], config[CONFIG_NATT_MODE]);
 			exit(1);
 		}
 

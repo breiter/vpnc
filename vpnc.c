@@ -103,6 +103,15 @@ const unsigned char VID_DWR[] = { /* DWR: Delete with reason */
  *};
  */
 
+const unsigned char VID_NATSI[] = { /* NaT-SI */
+	0x4e, 0x61, 0x54, 0x2d, 0x53, 0x49
+};
+const unsigned char VID_NATSI_LONG[] = { /* NaT-SI sent by client */
+	0x4e, 0x61, 0x54, 0x2d, 0x53, 0x49,
+	0x00, 0x00, 0x00, 0x00, /* 20 bytes almost random (MD5? of what?) */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
 const unsigned char VID_CISCO_FRAG[] = { /* "FRAGMENTATION" */
 	0x40, 0x48, 0xB7, 0xD5, 0x6E, 0xBC, 0xE8, 0x85,
 	0x25, 0xE7, 0xDE, 0x7F, 0x00, 0xD6, 0xC2, 0xD3,
@@ -148,6 +157,8 @@ const struct vid_element vid_list[] = {
 	{ VID_NETSCREEN_15,	sizeof(VID_NETSCREEN_15),	"Netscreen 15" },
 	{ VID_NORTEL_CONT,	sizeof(VID_NORTEL_CONT),	"Nortel Contivity" },
 	{ VID_HEARTBEAT_NOTIFY,	sizeof(VID_HEARTBEAT_NOTIFY),	"Heartbeat Notify" },
+	{ VID_NATSI_LONG,	sizeof(VID_NATSI_LONG),		"Netlock NaT-SI" },
+	{ VID_NATSI,		sizeof(VID_NATSI),		"Netlock NaT-SI" },
 
 	{ NULL, 0, NULL }
 };
@@ -1309,30 +1320,37 @@ static void do_phase1_am_packet1(struct sa_block *s, const char *key_id)
 			memcpy(l->u.id.data, key_id, strlen(key_id));
 		}
 		flatten_isakmp_payload(l, &s->ike.idi_f, &s->ike.idi_size);
-		l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-			VID_XAUTH, sizeof(VID_XAUTH));
-		l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-			VID_UNITY, sizeof(VID_UNITY));
-		if ((opt_natt_mode == NATT_NORMAL) || (opt_natt_mode == NATT_FORCE)) {
+
+		if (opt_vendor == VENDOR_NORTEL) {
+			if (opt_natt_mode == NATT_NORTEL_UDP)
+				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+					VID_NATSI_LONG, sizeof(VID_NATSI_LONG));
+		} else { /* (opt_vendor != VENDOR_NORTEL) */
 			l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-				VID_NATT_RFC, sizeof(VID_NATT_RFC));
+				VID_XAUTH, sizeof(VID_XAUTH));
 			l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-				VID_NATT_02N, sizeof(VID_NATT_02N));
-			l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-				VID_NATT_02, sizeof(VID_NATT_02));
-			l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-				VID_NATT_01, sizeof(VID_NATT_01));
-			l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-				VID_NATT_00, sizeof(VID_NATT_00));
-		}
-		s->ike.dpd_idle = atoi(config[CONFIG_DPD_IDLE]);
-		if (s->ike.dpd_idle != 0) {
-			if (s->ike.dpd_idle < 10)
-				s->ike.dpd_idle = 10;
-			if (s->ike.dpd_idle > 86400)
-				s->ike.dpd_idle = 86400;
-			l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-				VID_DPD, sizeof(VID_DPD));
+				VID_UNITY, sizeof(VID_UNITY));
+			if ((opt_natt_mode == NATT_NORMAL) || (opt_natt_mode == NATT_FORCE)) {
+				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+					VID_NATT_RFC, sizeof(VID_NATT_RFC));
+				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+					VID_NATT_02N, sizeof(VID_NATT_02N));
+				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+					VID_NATT_02, sizeof(VID_NATT_02));
+				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+					VID_NATT_01, sizeof(VID_NATT_01));
+				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+					VID_NATT_00, sizeof(VID_NATT_00));
+			}
+			s->ike.dpd_idle = atoi(config[CONFIG_DPD_IDLE]);
+			if (s->ike.dpd_idle != 0) {
+				if (s->ike.dpd_idle < 10)
+					s->ike.dpd_idle = 10;
+				if (s->ike.dpd_idle > 86400)
+					s->ike.dpd_idle = 86400;
+				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+					VID_DPD, sizeof(VID_DPD));
+			}
 		}
 		flatten_isakmp_packet(p1, &pkt, &pkt_len, 0);
 		free_isakmp_packet(p1);
@@ -1362,6 +1380,7 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *key_id, const c
 		gcry_md_hd_t skeyid_ctx;
 		uint8_t *dh_shared_secret;
 		int seen_natt_vid = 0, seen_natd = 0, seen_natd_them = 0, seen_natd_us = 0;
+		int seen_natsi = 0;
 		int natt_draft = -1;
 		crypto_ctx *cctx;
 		crypto_error *crerr = NULL;
@@ -1596,6 +1615,11 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *key_id, const c
 					&& memcmp(rp->u.vid.data, VID_HEARTBEAT_NOTIFY,
 						sizeof(VID_HEARTBEAT_NOTIFY)) == 0) {
 					DEBUG(2, printf("peer sent Heartbeat Notify payload\n"));
+				} else if (rp->u.vid.length == sizeof(VID_NATSI)
+					&& memcmp(rp->u.vid.data, VID_NATSI,
+						sizeof(VID_NATSI)) == 0) {
+					seen_natsi = 1;
+					DEBUG(2, printf("peer is Netlock NaT-SI\n"));
 				} else {
 					hex_dump("unknown ISAKMP_PAYLOAD_VID",
 						rp->u.vid.data, rp->u.vid.length, NULL);
@@ -1955,7 +1979,7 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *key_id, const c
 		free(dh_shared_secret);
 
 		/* Determine presence of NAT */
-		if (s->ike.natd_type != 0) {
+		if (opt_vendor != VENDOR_NORTEL && s->ike.natd_type != 0) {
 			seen_natd_us = 0;
 			/* this could be repeated for any known outbound interfaces */
 			{
@@ -2009,6 +2033,18 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *key_id, const c
 			DEBUG(1, printf("NAT status: no NAT-T VID seen\n"));
 		}
 
+		if (opt_vendor == VENDOR_NORTEL && seen_natsi) {
+			DEBUG(1, printf("NAT status: NaT-SI\n"));
+#if 1 /* AB: it's not mandatory to re-open socket */
+			/* close and re-create the socket on random port*/
+			close(s->ike_fd);
+			s->ike.src_port = 0;
+			s->ike_fd = make_socket(s, s->ike.src_port, s->ike.dst_port);
+			if (s->ike_fd < 0)
+				error(1, errno, "re-opening socket");
+#endif
+		}
+
 		/* This seems to cause a duplicate free of some data when rekeying:
 		 * *** glibc detected *** vpnc-connect: free(): invalid pointer: 0x09d63ba5
 		 * See also: http://bugs.gentoo.org/show_bug.cgi?id=229003
@@ -2043,46 +2079,50 @@ static void do_phase1_am_packet3(struct sa_block *s)
 		pl->u.n.doi = ISAKMP_DOI_IPSEC;
 		pl->u.n.protocol = ISAKMP_IPSEC_PROTO_ISAKMP;
 		pl->u.n.type = ISAKMP_N_IPSEC_INITIAL_CONTACT;
-		pl->u.n.spi_length = 2 * ISAKMP_COOKIE_LENGTH;
-		pl->u.n.spi = xallocc(2 * ISAKMP_COOKIE_LENGTH);
-		memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 0, s->ike.i_cookie, ISAKMP_COOKIE_LENGTH);
-		memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 1, s->ike.r_cookie, ISAKMP_COOKIE_LENGTH);
 
-		/* send PSK-hash if hybrid authentication is negotiated */
-		if (s->ike.auth_algo == IKE_AUTH_HybridInitRSA ||
-			s->ike.auth_algo == IKE_AUTH_HybridInitDSS) {
-			/* Notify - PRESHARED_KEY_HASH */
-			pl = pl->next = new_isakmp_payload(ISAKMP_PAYLOAD_N);
-			pl->u.n.doi = ISAKMP_DOI_IPSEC;
-			pl->u.n.protocol = ISAKMP_IPSEC_PROTO_ISAKMP;
-			/* Notify Message - Type: PRESHARED_KEY_HASH */
-			pl->u.n.type =  ISAKMP_N_CISCO_PRESHARED_KEY_HASH;
+		if (opt_vendor != VENDOR_NORTEL) {
+			/* AB: not sent by netlock */
 			pl->u.n.spi_length = 2 * ISAKMP_COOKIE_LENGTH;
 			pl->u.n.spi = xallocc(2 * ISAKMP_COOKIE_LENGTH);
-			memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 0,
-				s->ike.i_cookie, ISAKMP_COOKIE_LENGTH);
-			memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 1,
-				s->ike.r_cookie, ISAKMP_COOKIE_LENGTH);
-			pl->u.n.data_length = s->ike.md_len;
-			pl->u.n.data = xallocc(pl->u.n.data_length);
-			memcpy(pl->u.n.data, s->ike.psk_hash, pl->u.n.data_length);
-			/* End Notify - PRESHARED_KEY_HASH */
-		}
-		pl = pl->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-			VID_UNKNOWN, sizeof(VID_UNKNOWN));
-		pl = pl->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
-			VID_UNITY, sizeof(VID_UNITY));
+			memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 0, s->ike.i_cookie, ISAKMP_COOKIE_LENGTH);
+			memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 1, s->ike.r_cookie, ISAKMP_COOKIE_LENGTH);
 
-		/* include NAT traversal discovery payloads */
-		if (s->ike.natd_type != 0) {
-			pl = pl->next = new_isakmp_data_payload(s->ike.natd_type,
-				s->ike.natd_them, s->ike.md_len);
-			pl = pl->next = new_isakmp_data_payload(s->ike.natd_type,
-				s->ike.natd_us, s->ike.md_len);
-			free(s->ike.natd_us);
-			free(s->ike.natd_them);
-			s->ike.natd_us = NULL;
-			s->ike.natd_them = NULL;
+			/* send PSK-hash if hybrid authentication is negotiated */
+			if (s->ike.auth_algo == IKE_AUTH_HybridInitRSA ||
+				s->ike.auth_algo == IKE_AUTH_HybridInitDSS) {
+				/* Notify - PRESHARED_KEY_HASH */
+				pl = pl->next = new_isakmp_payload(ISAKMP_PAYLOAD_N);
+				pl->u.n.doi = ISAKMP_DOI_IPSEC;
+				pl->u.n.protocol = ISAKMP_IPSEC_PROTO_ISAKMP;
+				/* Notify Message - Type: PRESHARED_KEY_HASH */
+				pl->u.n.type =  ISAKMP_N_CISCO_PRESHARED_KEY_HASH;
+				pl->u.n.spi_length = 2 * ISAKMP_COOKIE_LENGTH;
+				pl->u.n.spi = xallocc(2 * ISAKMP_COOKIE_LENGTH);
+				memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 0,
+					s->ike.i_cookie, ISAKMP_COOKIE_LENGTH);
+				memcpy(pl->u.n.spi + ISAKMP_COOKIE_LENGTH * 1,
+					s->ike.r_cookie, ISAKMP_COOKIE_LENGTH);
+				pl->u.n.data_length = s->ike.md_len;
+				pl->u.n.data = xallocc(pl->u.n.data_length);
+				memcpy(pl->u.n.data, s->ike.psk_hash, pl->u.n.data_length);
+				/* End Notify - PRESHARED_KEY_HASH */
+			}
+			pl = pl->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+				VID_UNKNOWN, sizeof(VID_UNKNOWN));
+			pl = pl->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+				VID_UNITY, sizeof(VID_UNITY));
+
+			/* include NAT traversal discovery payloads */
+			if (s->ike.natd_type != 0) {
+				pl = pl->next = new_isakmp_data_payload(s->ike.natd_type,
+					s->ike.natd_them, s->ike.md_len);
+				pl = pl->next = new_isakmp_data_payload(s->ike.natd_type,
+					s->ike.natd_us, s->ike.md_len);
+				free(s->ike.natd_us);
+				free(s->ike.natd_them);
+				s->ike.natd_us = NULL;
+				s->ike.natd_them = NULL;
+			}
 		}
 
 		flatten_isakmp_packet(p2, &p2kt, &p2kt_len, s->ike.ivlen);
@@ -2789,10 +2829,17 @@ static int check_transform(struct sa_block *s,struct isakmp_payload *transform)
 		case ISAKMP_IPSEC_ATTRIB_SA_LIFE_DURATION:
 			/* already processed above in ISAKMP_IPSEC_ATTRIB_SA_LIFE_TYPE: */
 			break;
+		case ISAKMP_IPSEC_ATTRIB_NORTEL_NATT_UDP_PORT:
+			/* Contivity puts here server's UDP port, but claims
+			   IPSEC_ENCAP_TUNNEL instead of IPSEC_ENCAP_UDP_TUNNEL */
+			if (a->af == isakmp_attr_16) {
+				s->ipsec.peer_udpencap_port = ntohs(a->u.attr_16);
+				DEBUG(2, printf("got peer udp encapsulation port: %hu\n", s->ipsec.peer_udpencap_port));
+			} else
+				reject = ISAKMP_N_BAD_PROPOSAL_SYNTAX;
+			break;
 		default:
-/* removed for NortelVPN
- *			reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
- */
+			reject = ISAKMP_N_ATTRIBUTES_NOT_SUPPORTED;
 			break;
 		}
 
@@ -3332,6 +3379,10 @@ static void do_phase2_qm(struct sa_block *s)
 			s->esp_fd = make_socket(s, opt_udpencapport, s->ipsec.peer_udpencap_port);
 			s->ipsec.encap_mode = IPSEC_ENCAP_UDP_TUNNEL;
 			s->ipsec.natt_active_mode = NATT_ACTIVE_CISCO_UDP;
+		} else if ((opt_natt_mode == NATT_NORTEL_UDP) && s->ipsec.peer_udpencap_port) {
+			s->esp_fd = make_socket(s, 0, s->ipsec.peer_udpencap_port);
+			s->ipsec.encap_mode = IPSEC_ENCAP_UDP_TUNNEL;
+			s->ipsec.natt_active_mode = NATT_ACTIVE_CISCO_UDP; /* AB: change it */
 		} else if (s->ipsec.encap_mode != IPSEC_ENCAP_TUNNEL) {
 			s->esp_fd = s->ike_fd;
 		} else {
