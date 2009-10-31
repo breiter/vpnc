@@ -2029,11 +2029,8 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *key_id, const c
 			} else {
 				DEBUG(1, printf("NAT status: NAT-T VID seen, no NAT device detected\n"));
 			}
-		} else {
-			DEBUG(1, printf("NAT status: no NAT-T VID seen\n"));
-		}
 
-		if (opt_vendor == VENDOR_NORTEL && seen_natsi) {
+		} else if (opt_vendor == VENDOR_NORTEL && seen_natsi) {
 			DEBUG(1, printf("NAT status: NaT-SI\n"));
 #if 1 /* AB: it's not mandatory to re-open socket */
 			/* close and re-create the socket on random port*/
@@ -2043,6 +2040,8 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *key_id, const c
 			if (s->ike_fd < 0)
 				error(1, errno, "re-opening socket");
 #endif
+		} else {
+			DEBUG(1, printf("NAT status: no NAT-T VID seen\n"));
 		}
 
 		/* This seems to cause a duplicate free of some data when rekeying:
