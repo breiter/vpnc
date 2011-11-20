@@ -132,7 +132,10 @@ const unsigned char VID_HEARTBEAT_NOTIFY[] = { /* Heartbeat Notify */
 	0x74, 0x5f, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x79,
 	0x38, 0x6b, 0x01, 0x00
 };
-const unsigned char VID_NORTEL_CONT[] = { /* BNES: Bay Networks Enterprise Switch + version/id of some kind */
+const unsigned char VID_NORTEL_CONT_09[] = { /* BNES: Bay Networks Enterprise Switch + version/id of some kind */
+	0x42, 0x4e, 0x45, 0x53, 0x00, 0x00, 0x00, 0x09
+};
+const unsigned char VID_NORTEL_CONT_0A[] = {
 	0x42, 0x4e, 0x45, 0x53, 0x00, 0x00, 0x00, 0x0a
 };
 
@@ -160,7 +163,8 @@ const struct vid_element vid_list[] = {
 	{ VID_DWR,		sizeof(VID_DWR),	"Delete With Reason" },
 	{ VID_CISCO_FRAG,	sizeof(VID_CISCO_FRAG),	"Cisco Fragmentation" },
 	{ VID_NETSCREEN_15,	sizeof(VID_NETSCREEN_15),	"Netscreen 15" },
-	{ VID_NORTEL_CONT,	sizeof(VID_NORTEL_CONT),	"Nortel Contivity" },
+	{ VID_NORTEL_CONT_09,	sizeof(VID_NORTEL_CONT_09),	"Nortel Contivity v9" },
+	{ VID_NORTEL_CONT_0A,	sizeof(VID_NORTEL_CONT_0A),	"Nortel Contivity v10" },
 	{ VID_HEARTBEAT_NOTIFY,	sizeof(VID_HEARTBEAT_NOTIFY),	"Heartbeat Notify" },
 	{ VID_NATSI_LONG,	sizeof(VID_NATSI_LONG),		"Netlock NaT-SI" },
 	{ VID_NATSI,		sizeof(VID_NATSI),		"Netlock NaT-SI" },
