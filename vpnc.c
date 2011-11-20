@@ -1335,7 +1335,7 @@ static void do_phase1_am_packet1(struct sa_block *s, const char *key_id)
 
 		if (opt_vendor == VENDOR_NORTEL) {
 			if (opt_natt_mode == NATT_NORTEL_UDP)
-				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+				l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
 					VID_NATSI_LONG, sizeof(VID_NATSI_LONG));
 		} else { /* (opt_vendor != VENDOR_NORTEL) */
 			l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
@@ -1362,7 +1362,7 @@ static void do_phase1_am_packet1(struct sa_block *s, const char *key_id)
 					s->ike.dpd_idle = 10;
 				if (s->ike.dpd_idle > 86400)
 					s->ike.dpd_idle = 86400;
-				l = l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
+				l->next = new_isakmp_data_payload(ISAKMP_PAYLOAD_VID,
 					VID_DPD, sizeof(VID_DPD));
 			}
 		}
@@ -2142,7 +2142,7 @@ static void do_phase1_am_packet3(struct sa_block *s)
 			if (s->ike.natd_type != 0) {
 				pl = pl->next = new_isakmp_data_payload(s->ike.natd_type,
 					s->ike.natd_them, s->ike.md_len);
-				pl = pl->next = new_isakmp_data_payload(s->ike.natd_type,
+				pl->next = new_isakmp_data_payload(s->ike.natd_type,
 					s->ike.natd_us, s->ike.md_len);
 				free(s->ike.natd_us);
 				free(s->ike.natd_them);
