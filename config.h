@@ -141,4 +141,7 @@ extern uint16_t opt_nortel_client_id;
 extern void hex_dump(const char *str, const void *data, ssize_t len, const struct debug_strings *decode);
 extern void do_config(int argc, char **argv);
 
+extern void (*logmsg)(int priority, const char *format, ...)
+	__attribute__ ((__format__ (__printf__, 2, 3)));
+
 #endif
