@@ -1388,7 +1388,7 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *key_id, const c
 		struct isakmp_payload *hash = NULL;
 		struct isakmp_payload *sig = NULL;
 		struct isakmp_payload *idp = NULL;
-		int seen_sa = 0, seen_xauth_vid = 0;
+		int seen_sa = 0;
 		uint8_t *psk_skeyid;
 		uint8_t *skeyid;
 		gcry_md_hd_t skeyid_ctx;
@@ -1578,7 +1578,7 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *key_id, const c
 				if (rp->u.vid.length == sizeof(VID_XAUTH)
 					&& memcmp(rp->u.vid.data, VID_XAUTH,
 						sizeof(VID_XAUTH)) == 0) {
-					seen_xauth_vid = 1;
+					DEBUG(2, printf("peer is XAUTH capable (draft-ietf-ipsec-isakmp-xauth-06)\n"));
 				} else if (rp->u.vid.length == sizeof(VID_NATT_RFC)
 					&& memcmp(rp->u.vid.data, VID_NATT_RFC,
 						sizeof(VID_NATT_RFC)) == 0) {
