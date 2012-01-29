@@ -828,6 +828,19 @@ void do_config(int argc, char **argv)
 			printf("%s: unknown nat traversal mode %s\nknown modes: natt none force-natt cisco-udp nortel-udp\n", argv[0], config[CONFIG_NATT_MODE]);
 			exit(1);
 		}
+		if ((opt_vendor == VENDOR_NORTEL) &&
+		    (opt_natt_mode != NATT_NONE) &&
+		    (opt_natt_mode != NATT_NORTEL_UDP)) {
+			printf("%s: Vendor nortel only accepts nat traversal modes: none nortel-udp\n"
+				"\tdefaults to \"none\"\n", argv[0]);
+			opt_natt_mode = NATT_NONE;
+		}
+		if ((opt_vendor != VENDOR_NORTEL) &&
+		    (opt_natt_mode == NATT_NORTEL_UDP)) {
+			printf("%s: nat traversal mode nortel-udp allowed for Vendor nortel only\n"
+				"\tdefaults to \"none\"\n", argv[0]);
+			opt_natt_mode = NATT_NONE;
+		}
 
 		if (!strcmp(config[CONFIG_IF_MODE], "tun")) {
 			opt_if_mode = IF_MODE_TUN;
