@@ -2933,7 +2933,7 @@ static int check_transform(struct sa_block *s,struct isakmp_payload *transform)
 				seen_auth, NULL, 0)->name));
 	if (s->ipsec.cry_algo == GCRY_CIPHER_DES && !opt_1des) {
 		error(1, 0, "peer selected (single) DES as \"encrytion\" method.\n"
-			"This algorithm is considered to weak today\n"
+			"This algorithm is considered too weak today\n"
 			"If your vpn concentrator admin still insists on using DES\n"
 			"use the \"--enable-1des\" option.\n");
 	} else if (s->ipsec.cry_algo == GCRY_CIPHER_NONE && !opt_no_encryption) {
@@ -3335,7 +3335,7 @@ static void do_phase2_qm(struct sa_block *s)
 									seen_auth, NULL, 0)->name));
 						if (s->ipsec.cry_algo == GCRY_CIPHER_DES && !opt_1des) {
 							error(1, 0, "peer selected (single) DES as \"encrytion\" method.\n"
-							"This algorithm is considered to weak today\n"
+							"This algorithm is considered too weak today\n"
 							"If your vpn concentrator admin still insists on using DES\n"
 							"use the \"--enable-1des\" option.\n");
 						} else if (s->ipsec.cry_algo == GCRY_CIPHER_NONE && !opt_no_encryption) {
