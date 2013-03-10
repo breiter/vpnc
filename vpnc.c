@@ -2374,7 +2374,7 @@ static int do_phase2_xauth(struct sa_block *s)
 			case ISAKMP_XAUTH_06_ATTRIB_ANSWER:
 			case ISAKMP_XAUTH_02_ATTRIB_ANSWER:
 			case ISAKMP_XAUTH_06_ATTRIB_NEXT_PIN:
-			case ISAKMP_XAUTH_02_ATTRIB_NEXT_PIN:
+			case ISAKMP_XAUTH_02_ATTRIB_NEXT_PIN: /* ISAKMP_MODECFG_ATTRIB_CISCO_UNKNOWN_0X0015 */
 			case ISAKMP_XAUTH_ATTRIB_CISCOEXT_VENDOR:
 			case ISAKMP_MODECFG_ATTRIB_NORTEL_UNKNOWN_4011:
 			case ISAKMP_MODECFG_ATTRIB_NORTEL_CLIENT_ID:
@@ -2451,6 +2451,14 @@ static int do_phase2_xauth(struct sa_block *s)
 						na->u.lots.length);
 					break;
 				}
+			case ISAKMP_XAUTH_02_ATTRIB_NEXT_PIN:
+				/* For Cisco ASA this is an unknown attribute */
+				/* ISAKMP_MODECFG_ATTRIB_CISCO_UNKNOWN_0X0015 */
+				if (opt_vendor == VENDOR_CISCO) {
+					na = new_isakmp_attribute_16(ap->type, ap->u.attr_16, NULL);
+					break;
+				}
+				/* For Nortel, fallback in next case */
 			case ISAKMP_XAUTH_06_ATTRIB_ANSWER:
 			case ISAKMP_XAUTH_02_ATTRIB_ANSWER:
 			case ISAKMP_XAUTH_06_ATTRIB_USER_PASSWORD:
@@ -2458,7 +2466,6 @@ static int do_phase2_xauth(struct sa_block *s)
 			case ISAKMP_XAUTH_06_ATTRIB_PASSCODE:
 			case ISAKMP_XAUTH_02_ATTRIB_PASSCODE:
 			case ISAKMP_XAUTH_06_ATTRIB_NEXT_PIN:
-			case ISAKMP_XAUTH_02_ATTRIB_NEXT_PIN:
 				if (passwd_used && config[CONFIG_NON_INTERACTIVE]) {
 					reject = ISAKMP_N_AUTHENTICATION_FAILED;
 					phase2_fatal(s, "noninteractive can't reuse password", reject);
