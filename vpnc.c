@@ -183,6 +183,10 @@ static void phase2_fatal(struct sa_block *s, const char *msg, int id);
 static uint8_t r_packet[8192];
 static ssize_t r_length;
 
+static struct sa_block *s_atexit_sa;
+
+static void close_tunnel(struct sa_block *s);
+
 void print_vid(const unsigned char *vid, uint16_t len) {
 
 	int vid_index = 0;
@@ -395,11 +399,21 @@ static void setup_tunnel(struct sa_block *s)
 	}
 }
 
+static void atexit_close(void)
+{
+	if (s_atexit_sa != NULL) {
+		close_tunnel(s_atexit_sa);
+		s_atexit_sa = NULL;
+	}
+}
+
 static void config_tunnel(struct sa_block *s)
 {
 	setenv("VPNGATEWAY", inet_ntoa(s->dst), 1);
 	setenv("reason", "connect", 1);
 	system(config[CONFIG_SCRIPT]);
+	s_atexit_sa = s;
+	atexit(atexit_close);
 }
 
 static void close_tunnel(struct sa_block *s)
@@ -3440,19 +3454,15 @@ static void do_phase2_qm(struct sa_block *s)
 #endif
 
 				s->esp_fd = socket(PF_INET, SOCK_RAW, IPPROTO_ESP);
-				if (s->esp_fd == -1) {
-					close_tunnel(s);
+				if (s->esp_fd == -1)
 					error(1, errno, "Couldn't open socket of ESP. Maybe something registered ESP already.\nPlease try '--natt-mode force-natt' or disable whatever is using ESP.\nsocket(PF_INET, SOCK_RAW, IPPROTO_ESP)");
-				}
 #ifdef FD_CLOEXEC
 				/* do not pass socket to vpnc-script, etc. */
 				fcntl(s->esp_fd, F_SETFD, FD_CLOEXEC);
 #endif
 #ifdef IP_HDRINCL
-				if (setsockopt(s->esp_fd, IPPROTO_IP, IP_HDRINCL, &hincl, sizeof(hincl)) == -1) {
-					close_tunnel(s);
+				if (setsockopt(s->esp_fd, IPPROTO_IP, IP_HDRINCL, &hincl, sizeof(hincl)) == -1)
 					error(1, errno, "setsockopt(esp_fd, IPPROTO_IP, IP_HDRINCL, 1)");
-				}
 #endif
 			}
 		}
@@ -3871,6 +3881,7 @@ int main(int argc, char **argv)
 	/* Cleanup routing */
 	DEBUGTOP(2, printf("S8 close_tunnel\n"));
 	close_tunnel(s);
+	s_atexit_sa = NULL;
 
 	/* Free resources */
 	DEBUGTOP(2, printf("S9 cleanup\n"));
