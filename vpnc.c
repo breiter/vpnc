@@ -2508,14 +2508,17 @@ static int do_phase2_xauth(struct sa_block *s)
 						|| ap->type == ISAKMP_XAUTH_02_ATTRIB_USER_PASSWORD) ?
 						"Password" : "Passcode",
 						config[CONFIG_XAUTH_USERNAME], ntop_buf);
-					pass = getpass(prompt);
+					pass = vpnc_getpass(prompt);
 					free(prompt);
+					if (pass == NULL)
+						error(2, 0, "unable to get password");
 
 					na = new_isakmp_attribute(ap->type, NULL);
 					na->u.lots.length = strlen(pass);
 					na->u.lots.data = xallocc(na->u.lots.length);
 					memcpy(na->u.lots.data, pass, na->u.lots.length);
 					memset(pass, 0, na->u.lots.length);
+					free(pass);
 				} else {
 					if (opt_vendor == VENDOR_NORTEL
 					    && opt_auth_mode != AUTH_MODE_NORTEL_GPASSWORD)
