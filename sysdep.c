@@ -443,52 +443,14 @@ int tun_open (char *dev, enum if_mode_enum mode)
  * require the tuntaposx driver kext to be loaded to work.
  */
 
-static int utun_open_helper (struct ctl_info ctlInfo, int utunnum)
-{
-	struct sockaddr_ctl sc;
-	int fd;
-
-	fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
-
-	if (fd < 0)
-	{
-		return -2;
-	}
-
-	if (ioctl(fd, CTLIOCGINFO, &ctlInfo) == -1)
-	{
-		close (fd);
-		return -2;
-	}
-
-
-	sc.sc_id = ctlInfo.ctl_id;
-	sc.sc_len = sizeof(sc);
-	sc.sc_family = AF_SYSTEM;
-	sc.ss_sysaddr = AF_SYS_CONTROL;
-
-	sc.sc_unit = utunnum+1;
-
-
-	/* If the connect is successful, a utun%d device will be created, where "%d"
-	* is (sc.sc_unit - 1) */
-
-	if (connect (fd, (struct sockaddr *)&sc, sizeof(sc)) < 0)
-	{
-	  close(fd);
-	  return -1;
-	}
-
-	return fd;
-}
-
-int open_darwin_utun (char *dev)
+int tun_open(char *dev, enum if_mode_enum mode)
 {
 	struct ctl_info ctlInfo;
 	int fd;
 	char utunname[20];
 	int utunnum =-1;
 	socklen_t utunname_len = sizeof(utunname);
+	struct sockaddr_ctl sc;
 
 	if (strlcpy(ctlInfo.ctl_name, UTUN_CONTROL_NAME, sizeof(ctlInfo.ctl_name)) >=
 	  sizeof(ctlInfo.ctl_name))
@@ -497,21 +459,31 @@ int open_darwin_utun (char *dev)
 	  return -1;
 	}
 
-	/* try to open first available utun device if no specific utun is requested */
-	if (utunnum == -1)
+    //open socket
+	fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
+	if (fd < 0) {
+		printf("Opening utun (%s): %s", "socket(SYSPROTO_CONTROL)",strerror (errno));
+		return -1;
+    }
+	if (ioctl(fd, CTLIOCGINFO, &ctlInfo) == -1)
 	{
-	  for (utunnum=0; utunnum<255; utunnum++)
-	    {
-	      fd = utun_open_helper (ctlInfo, utunnum);
-	      /* Break if the fd is valid,
-	       * or if early initalization failed (-2) */
-	      if (fd !=-1)
-	        break;
-	    }
+		close (fd);
+        printf("Opening utun (%s): %s", "ioctl(CTLIOCGINFO)", strerror (errno));
+		return -1;
 	}
-	else
+
+    //connect socket to utun
+	sc.sc_id      = ctlInfo.ctl_id;
+	sc.sc_len     = sizeof(sc);
+	sc.sc_family  = AF_SYSTEM;
+	sc.ss_sysaddr = AF_SYS_CONTROL;
+	sc.sc_unit    = 0; //if we ask for utun0, the kernel will allocate next available utunX
+
+	if (connect (fd, (struct sockaddr *)&sc, sizeof(sc)) < 0)
 	{
-	  fd = utun_open_helper (ctlInfo, utunnum);
+	  close(fd);
+	  printf("Opening utun (%s): %s", "connect(AF_SYS_CONTROL)", strerror (errno));
+	  return -1;
 	}
 
 	if(fd < 0) return fd; //error
@@ -525,11 +497,6 @@ int open_darwin_utun (char *dev)
 	printf("Opened utun device %s\n", utunname);
 	strcpy(dev, utunname); //return device name 
 	return fd;
-}
-
-int tun_open(char *dev, enum if_mode_enum mode)
-{
-	return open_darwin_utun(dev);
 }
 
 #elif defined(IFF_TUN)
