@@ -1,9 +1,11 @@
-.depends
+.depend
 vpnc-debug.c
 vpnc-debug.h
 vpnc-debug.o
 vpnc.8
-
+cisco-decrypt
+test-crypto
+vpnc
 
 # Object files
 *.o
