@@ -61,7 +61,14 @@
 #elif defined(__linux__)
 #include <linux/if_tun.h>
 #elif defined(__APPLE__)
-/* no header for tun */
+/* xnu 1456.1.26 (OS X 10.6)+ supports native user tunnel (utun) sockets */
+#include <ctype.h>
+#include <sys/ioctl.h>
+#include <sys/kern_control.h>
+#include <sys/uio.h>
+#include <sys/sys_domain.h>
+#include <net/if_utun.h>
+#include <netinet/ip.h>
 #elif defined(__CYGWIN__)
 #include "tap-win32.h"
 #else
@@ -430,6 +437,101 @@ int tun_open (char *dev, enum if_mode_enum mode)
 
 	return fd;
 }
+#elif defined(__APPLE__)
+/* xnu 1456.1.26 (OS X 10.6)+ implements native user tunnels. untun devices are sockets 
+ * rather than character devices. They behave like FreeBSD or OpenBSD tunnels and do not
+ * require the tuntaposx driver kext to be loaded to work.
+ */
+
+static int utun_open_helper (struct ctl_info ctlInfo, int utunnum)
+{
+	struct sockaddr_ctl sc;
+	int fd;
+
+	fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
+
+	if (fd < 0)
+	{
+		return -2;
+	}
+
+	if (ioctl(fd, CTLIOCGINFO, &ctlInfo) == -1)
+	{
+		close (fd);
+		return -2;
+	}
+
+
+	sc.sc_id = ctlInfo.ctl_id;
+	sc.sc_len = sizeof(sc);
+	sc.sc_family = AF_SYSTEM;
+	sc.ss_sysaddr = AF_SYS_CONTROL;
+
+	sc.sc_unit = utunnum+1;
+
+
+	/* If the connect is successful, a utun%d device will be created, where "%d"
+	* is (sc.sc_unit - 1) */
+
+	if (connect (fd, (struct sockaddr *)&sc, sizeof(sc)) < 0)
+	{
+	  close(fd);
+	  return -1;
+	}
+
+	return fd;
+}
+
+int open_darwin_utun (char *dev)
+{
+	struct ctl_info ctlInfo;
+	int fd;
+	char utunname[20];
+	int utunnum =-1;
+	socklen_t utunname_len = sizeof(utunname);
+
+	if (strlcpy(ctlInfo.ctl_name, UTUN_CONTROL_NAME, sizeof(ctlInfo.ctl_name)) >=
+	  sizeof(ctlInfo.ctl_name))
+	{
+	  printf("Opening utun: UTUN_CONTROL_NAME too long\n");
+	  return -1;
+	}
+
+	/* try to open first available utun device if no specific utun is requested */
+	if (utunnum == -1)
+	{
+	  for (utunnum=0; utunnum<255; utunnum++)
+	    {
+	      fd = utun_open_helper (ctlInfo, utunnum);
+	      /* Break if the fd is valid,
+	       * or if early initalization failed (-2) */
+	      if (fd !=-1)
+	        break;
+	    }
+	}
+	else
+	{
+	  fd = utun_open_helper (ctlInfo, utunnum);
+	}
+
+	if(fd < 0) return fd; //error
+
+	/* Retrieve the assigned interface name. */
+	if (getsockopt (fd, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, utunname, &utunname_len)) {
+		printf("Error retrieving utun interface name\n");
+		return -1;
+	}
+
+	printf("Opened utun device %s\n", utunname);
+	strcpy(dev, utunname); //return device name 
+	return fd;
+}
+
+int tun_open(char *dev, enum if_mode_enum mode)
+{
+	return open_darwin_utun(dev);
+}
+
 #elif defined(IFF_TUN)
 int tun_open(char *dev, enum if_mode_enum mode)
 {
@@ -587,6 +689,49 @@ int tun_write(int fd, unsigned char *buf, int len)
 
 	return -1;
 }
+#elif defined(__APPLE__)
+
+static inline int header_modify_read_write_return (int len)
+{
+    if (len > 0)
+        return len > sizeof (u_int32_t) ? len - sizeof (u_int32_t) : 0;
+    else
+        return len;
+}
+
+//read from utun
+int tun_read(int fd, uint8_t *buf, int len) {
+	u_int32_t type;
+	struct iovec iv[2];
+
+	iv[0].iov_base = (char *)&type;
+	iv[0].iov_len = sizeof (type);
+	iv[1].iov_base = buf;
+	iv[1].iov_len = len;
+
+	return header_modify_read_write_return(readv(fd, iv, 2));
+}
+//write to utun
+int tun_write(int fd, uint8_t *buf, int len)
+{
+	u_int32_t type;
+	struct iovec iv[2];
+	struct ip *iph;
+
+	iph = (struct ip *) buf;
+
+	//not obvious how to support IPV6 hereclear
+
+	type = htonl (AF_INET);
+
+	iv[0].iov_base = (char *)&type;
+	iv[0].iov_len  = sizeof (type);
+	iv[1].iov_base = buf;
+	iv[1].iov_len  = len;
+
+	return header_modify_read_write_return(writev (fd, iv, 2));
+}
+
 #elif defined(NEW_TUN)
 #define MAX_MRU 2048
 struct tun_data {
