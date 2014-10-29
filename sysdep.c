@@ -720,9 +720,10 @@ int tun_write(int fd, uint8_t *buf, int len)
 
 	iph = (struct ip *) buf;
 
-	//not obvious how to support IPV6 hereclear
-
-	type = htonl (AF_INET);
+	if(iph->ip_v == 6)
+		type = htonl(AF_INET6);
+	else
+		type = htonl(AF_INET);
 
 	iv[0].iov_base = (char *)&type;
 	iv[0].iov_len  = sizeof (type);
