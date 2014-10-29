@@ -10,6 +10,13 @@ driver support" is needed in kernel.
 
 Project home page: http://www.unix-ag.uni-kl.de/~massar/vpnc/
 
+========= xnu (OS X 10.6) native user tunnels ==============================
+This fork of vpnc removes the requirement to have the tuntaposx kexts. It
+uses xnu/Darwin native user tunnels (utun) which are imnplemented as sockets.
+
+This is particularly advantagous for OS X 10.10, Yosemite because in Yosemite,
+kexts must be signed in order to load. This version of vpnc does not require
+any 3rd party kexts in order to work. Everything else is the same.
 
 ========= Contents of this file ============================================
 
