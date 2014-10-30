@@ -448,7 +448,6 @@ int tun_open(char *dev, enum if_mode_enum mode)
 	struct ctl_info ctlInfo;
 	int fd;
 	char utunname[20];
-	int utunnum =-1;
 	socklen_t utunname_len = sizeof(utunname);
 	struct sockaddr_ctl sc;
 
