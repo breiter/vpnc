@@ -443,32 +443,40 @@ int tun_open (char *dev, enum if_mode_enum mode)
  * require the tuntaposx driver kext to be loaded to work.
  */
 
-int tun_open(char *dev, enum if_mode_enum mode)
+
+/* Try to open the specified utun device. Return -2 on early failure.
+ * Return -1 if utun is supported but the requested utun is alread in use.
+ * 
+ * Using this mechanism because relying on sc.sc_unit = 0 to allocate the next
+ * available utun is unreliable after sleep/resume on Darwin 14.0/xnu-2782.1.9
+ * (aka OS X Yosemite 10.10 GM). Sometimes it will re-use utun0 and fail to work
+ * Sometimes it will allocate a utun that immediately causes a kernel panic
+ * when accessed.
+ */
+static int xnu_open_utun(int utunnum)
 {
-	struct ctl_info ctlInfo;
 	int fd;
-	char utunname[20];
-	socklen_t utunname_len = sizeof(utunname);
 	struct sockaddr_ctl sc;
+	struct ctl_info ctlInfo;
 
 	if (strlcpy(ctlInfo.ctl_name, UTUN_CONTROL_NAME, sizeof(ctlInfo.ctl_name)) >=
 	  sizeof(ctlInfo.ctl_name))
 	{
 	  printf("Opening utun: UTUN_CONTROL_NAME too long\n");
-	  return -1;
+	  return -2;
 	}
 
     //open socket
 	fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
 	if (fd < 0) {
 		printf("Opening utun (%s): %s", "socket(SYSPROTO_CONTROL)",strerror (errno));
-		return -1;
+		return -2;
     }
 	if (ioctl(fd, CTLIOCGINFO, &ctlInfo) == -1)
 	{
 		close (fd);
         printf("Opening utun (%s): %s", "ioctl(CTLIOCGINFO)", strerror (errno));
-		return -1;
+		return -2;
 	}
 
     //connect socket to utun
@@ -476,16 +484,32 @@ int tun_open(char *dev, enum if_mode_enum mode)
 	sc.sc_len     = sizeof(sc);
 	sc.sc_family  = AF_SYSTEM;
 	sc.ss_sysaddr = AF_SYS_CONTROL;
-	sc.sc_unit    = 0; //if we ask for utun0, the kernel will allocate next available utunX
+	sc.sc_unit    = utunnum + 1; //utunX where X is sc.sc_unit -1.
 
 	if (connect (fd, (struct sockaddr *)&sc, sizeof(sc)) < 0)
 	{
+	  //utun is already in use.
 	  close(fd);
-	  printf("Opening utun (%s): %s", "connect(AF_SYS_CONTROL)", strerror (errno));
 	  return -1;
 	}
 
-	if(fd < 0) return fd; //error
+	return fd;
+}
+
+int tun_open(char *dev, enum if_mode_enum mode)
+{
+	int fd;
+	char utunname[20];
+	socklen_t utunname_len = sizeof(utunname);
+	int utunnum;
+
+	for(utunnum=0; utunnum<255; utunnum++)
+	{
+		fd = xnu_open_utun(utunnum);
+		if(fd != -1) break; //-1 means requested utun is busy, try anohter.
+	}
+
+	if(fd == -2) return -1; //utun unsupported, could fail to the legacy /dev/tun* char device method here
 
 	/* Retrieve the assigned interface name. */
 	if (getsockopt (fd, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, utunname, &utunname_len)) {
