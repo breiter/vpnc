@@ -96,6 +96,10 @@ int tun_get_hwaddr(int fd, char *dev, uint8_t *hwaddr);
 
 /***************************************************************************/
 #if defined(__APPLE__)
+//export apple user tunnel IO
+int utun_read(int fd, uint8_t *buf, int len);
+int utun_write(int fd, uint8_t *buf, int len);
+
 #define HAVE_SA_LEN 1
 #define NEED_IPLEN_FIX 1
 

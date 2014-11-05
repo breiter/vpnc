@@ -270,8 +270,15 @@ static int tun_send_ip(struct sa_block *s)
 		len += ETH_HLEN;
 #endif
 	}
-
+#if defined(__APPLE__)
+	if(strncmp(s->tun_name, "utun", 4)==0) {
+		sent = utun_write(s->tun_fd, start, len);
+	} else {
+		sent = tun_write(s->tun_fd, start, len);
+	}
+#else
 	sent = tun_write(s->tun_fd, start, len);
+#endif
 	if (sent != len)
 		logmsg(LOG_ERR, "truncated in: %d -> %d\n", len, sent);
 	hex_dump("Tx pkt", start, len, NULL);
@@ -634,7 +641,15 @@ static int process_arp(struct sa_block *s, uint8_t *frame)
 	arp->arp_op = htons(ARPOP_REPLY);
 
 	frame_size = ETH_HLEN + sizeof(struct ether_arp);
+#if defined(__APPLE__)
+	if(strncmp(s->tun_name, "utun", 4)==0) {
+		utun_write(s->tun_fd, frame, frame_size);
+	} else {
+		tun_write(s->tun_fd, frame, frame_size);
+	}
+#else
 	tun_write(s->tun_fd, frame, frame_size);
+#endif
 	hex_dump("ARP reply", frame, frame_size, NULL);
 
 	return 1;
@@ -674,8 +689,15 @@ static void process_tun(struct sa_block *s)
 	}
 
 	/* Receive a packet from the tunnel interface */
+#if defined(__APPLE__)
+	if(strncmp(s->tun_name, "utun", 4)==0) {
+		pack = utun_read(s->tun_fd, start, size);
+	} else {
+		pack = tun_read(s->tun_fd, start, size);
+	}
+#elif
 	pack = tun_read(s->tun_fd, start, size);
-
+#endif
 	hex_dump("Rx pkt", start, pack, NULL);
 
 	if (opt_if_mode == IF_MODE_TAP) {

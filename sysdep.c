@@ -86,6 +86,96 @@ extern char **environ;
 static int ip_fd = -1, muxid;
 #endif
 
+#if defined(__APPLE__)
+/* xnu 1456.1.26 (OS X 10.6)+ implements native user tunnels. untun devices are sockets 
+ * rather than character devices. They behave like FreeBSD or OpenBSD tunnels and do not
+ * require the tuntaposx driver kext to be loaded to work.
+ */
+
+
+/* Try to open the specified utun device. Return -2 on early failure.
+ * Return -1 if utun is supported but the requested utun is alread in use.
+ * 
+ * Using this mechanism because relying on sc.sc_unit = 0 to allocate the next
+ * available utun is unreliable after sleep/resume on Darwin 14.0/xnu-2782.1.9
+ * (aka OS X Yosemite 10.10 GM). Sometimes it will re-use utun0 and fail to work
+ * Sometimes it will allocate a utun that immediately causes a kernel panic
+ * when accessed.
+ */
+
+#define XNU_NO_UTUN_IFACE_NAME -3
+#define XNU_UTUN_UNSUPPORTED -2
+#define XNU_UTUN_IN_USE -1
+
+static int xnu_open_utun(int utunnum)
+{
+	int fd;
+	struct sockaddr_ctl sc;
+	struct ctl_info ctlInfo;
+
+	if (strlcpy(ctlInfo.ctl_name, UTUN_CONTROL_NAME, sizeof(ctlInfo.ctl_name)) >=
+	  sizeof(ctlInfo.ctl_name))
+	{
+	  printf("Opening utun: UTUN_CONTROL_NAME too long\n");
+	  return XNU_UTUN_UNSUPPORTED;
+	}
+
+    //open socket
+	fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
+	if (fd < 0) {
+		printf("Opening utun (%s): %s", "socket(SYSPROTO_CONTROL)",strerror (errno));
+		return XNU_UTUN_UNSUPPORTED;
+    }
+	if (ioctl(fd, CTLIOCGINFO, &ctlInfo) == -1)
+	{
+		close (fd);
+        printf("Opening utun (%s): %s", "ioctl(CTLIOCGINFO)", strerror (errno));
+		return XNU_UTUN_UNSUPPORTED;
+	}
+
+    //connect socket to utun
+	sc.sc_id      = ctlInfo.ctl_id;
+	sc.sc_len     = sizeof(sc);
+	sc.sc_family  = AF_SYSTEM;
+	sc.ss_sysaddr = AF_SYS_CONTROL;
+	sc.sc_unit    = utunnum + 1; //utunX where X is sc.sc_unit -1.
+
+	if (connect (fd, (struct sockaddr *)&sc, sizeof(sc)) < 0)
+	{
+	  //utun is already in use.
+	  close(fd);
+	  return XNU_UTUN_IN_USE;
+	}
+
+	return fd;
+}
+
+int utun_open(char *dev)
+{
+	int fd;
+	char utunname[IFNAMSIZ];
+	socklen_t utunname_len = sizeof(utunname);
+	int utunnum;
+
+	for(utunnum=0; utunnum<255; utunnum++)
+	{
+		fd = xnu_open_utun(utunnum);
+		if(fd != XNU_UTUN_IN_USE) break; //XNU_UTUN_IN_USE means requested utun is busy, try another.
+	}
+
+	if(fd >= 0) {
+		/* Retrieve the assigned interface name. */
+		if (getsockopt (fd, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, utunname, &utunname_len)) {
+			printf("Error retrieving utun interface name\n");
+			return XNU_NO_UTUN_IFACE_NAME;
+		}
+
+		strcpy(dev, utunname); //return device name 
+	}
+	return fd; //fd or error code
+}
+#endif
+
 #if defined(__CYGWIN__)
 /*
  * Overlapped structures for asynchronous read and write
@@ -437,91 +527,6 @@ int tun_open (char *dev, enum if_mode_enum mode)
 
 	return fd;
 }
-#elif defined(__APPLE__)
-/* xnu 1456.1.26 (OS X 10.6)+ implements native user tunnels. untun devices are sockets 
- * rather than character devices. They behave like FreeBSD or OpenBSD tunnels and do not
- * require the tuntaposx driver kext to be loaded to work.
- */
-
-
-/* Try to open the specified utun device. Return -2 on early failure.
- * Return -1 if utun is supported but the requested utun is alread in use.
- * 
- * Using this mechanism because relying on sc.sc_unit = 0 to allocate the next
- * available utun is unreliable after sleep/resume on Darwin 14.0/xnu-2782.1.9
- * (aka OS X Yosemite 10.10 GM). Sometimes it will re-use utun0 and fail to work
- * Sometimes it will allocate a utun that immediately causes a kernel panic
- * when accessed.
- */
-static int xnu_open_utun(int utunnum)
-{
-	int fd;
-	struct sockaddr_ctl sc;
-	struct ctl_info ctlInfo;
-
-	if (strlcpy(ctlInfo.ctl_name, UTUN_CONTROL_NAME, sizeof(ctlInfo.ctl_name)) >=
-	  sizeof(ctlInfo.ctl_name))
-	{
-	  printf("Opening utun: UTUN_CONTROL_NAME too long\n");
-	  return -2;
-	}
-
-    //open socket
-	fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
-	if (fd < 0) {
-		printf("Opening utun (%s): %s", "socket(SYSPROTO_CONTROL)",strerror (errno));
-		return -2;
-    }
-	if (ioctl(fd, CTLIOCGINFO, &ctlInfo) == -1)
-	{
-		close (fd);
-        printf("Opening utun (%s): %s", "ioctl(CTLIOCGINFO)", strerror (errno));
-		return -2;
-	}
-
-    //connect socket to utun
-	sc.sc_id      = ctlInfo.ctl_id;
-	sc.sc_len     = sizeof(sc);
-	sc.sc_family  = AF_SYSTEM;
-	sc.ss_sysaddr = AF_SYS_CONTROL;
-	sc.sc_unit    = utunnum + 1; //utunX where X is sc.sc_unit -1.
-
-	if (connect (fd, (struct sockaddr *)&sc, sizeof(sc)) < 0)
-	{
-	  //utun is already in use.
-	  close(fd);
-	  return -1;
-	}
-
-	return fd;
-}
-
-int tun_open(char *dev, enum if_mode_enum mode)
-{
-	int fd;
-	char utunname[20];
-	socklen_t utunname_len = sizeof(utunname);
-	int utunnum;
-
-	for(utunnum=0; utunnum<255; utunnum++)
-	{
-		fd = xnu_open_utun(utunnum);
-		if(fd != -1) break; //-1 means requested utun is busy, try anohter.
-	}
-
-	if(fd == -2) return -1; //utun unsupported, could fail to the legacy /dev/tun* char device method here
-
-	/* Retrieve the assigned interface name. */
-	if (getsockopt (fd, SYSPROTO_CONTROL, UTUN_OPT_IFNAME, utunname, &utunname_len)) {
-		printf("Error retrieving utun interface name\n");
-		return -1;
-	}
-
-	printf("Opened utun device %s\n", utunname);
-	strcpy(dev, utunname); //return device name 
-	return fd;
-}
-
 #elif defined(IFF_TUN)
 int tun_open(char *dev, enum if_mode_enum mode)
 {
@@ -549,7 +554,7 @@ int tun_open(char *dev, enum if_mode_enum mode)
 #else
 int tun_open(char *dev, enum if_mode_enum mode)
 {
-	char tunname[14];
+	char tunname[IFNAMSIZ];
 	int i, fd;
 
 	if (*dev) {
@@ -559,6 +564,14 @@ int tun_open(char *dev, enum if_mode_enum mode)
 		snprintf(tunname, sizeof(tunname), "/dev/%s", dev);
 		return open(tunname, O_RDWR);
 	}
+
+#if defined(__APPLE__)
+	//default to using utun if possible.
+	if(mode == IF_MODE_TUN) {
+		fd = utun_open(dev);
+		if(fd >= 0) return fd; 
+	}
+#endif
 
 	for (i = 0; i < 255; i++) {
 		snprintf(tunname, sizeof(tunname), "/dev/%s%d",
@@ -613,6 +626,50 @@ int tun_close(int fd, char *dev)
 }
 #endif
 
+
+#if defined(__APPLE__)
+static inline int header_modify_read_write_return (int len)
+{
+    if (len > 0)
+        return len > sizeof (u_int32_t) ? len - sizeof (u_int32_t) : 0;
+    else
+        return len;
+}
+
+//read from utun
+int utun_read(int fd, uint8_t *buf, int len) {
+	u_int32_t type;
+	struct iovec iv[2];
+
+	iv[0].iov_base = (char *)&type;
+	iv[0].iov_len = sizeof (type);
+	iv[1].iov_base = buf;
+	iv[1].iov_len = len;
+
+	return header_modify_read_write_return(readv(fd, iv, 2));
+}
+//write to utun
+int utun_write(int fd, uint8_t *buf, int len)
+{
+	u_int32_t type;
+	struct iovec iv[2];
+	struct ip *iph;
+
+	iph = (struct ip *) buf;
+
+	if(iph->ip_v == 6)
+		type = htonl(AF_INET6);
+	else
+		type = htonl(AF_INET);
+
+	iv[0].iov_base = (char *)&type;
+	iv[0].iov_len  = sizeof (type);
+	iv[1].iov_base = buf;
+	iv[1].iov_len  = len;
+
+	return header_modify_read_write_return(writev (fd, iv, 2));
+}
+#endif
 
 #if defined(__sun__)
 int tun_write(int fd, unsigned char *buf, int len)
@@ -679,50 +736,6 @@ int tun_write(int fd, unsigned char *buf, int len)
 
 	return -1;
 }
-#elif defined(__APPLE__)
-
-static inline int header_modify_read_write_return (int len)
-{
-    if (len > 0)
-        return len > sizeof (u_int32_t) ? len - sizeof (u_int32_t) : 0;
-    else
-        return len;
-}
-
-//read from utun
-int tun_read(int fd, uint8_t *buf, int len) {
-	u_int32_t type;
-	struct iovec iv[2];
-
-	iv[0].iov_base = (char *)&type;
-	iv[0].iov_len = sizeof (type);
-	iv[1].iov_base = buf;
-	iv[1].iov_len = len;
-
-	return header_modify_read_write_return(readv(fd, iv, 2));
-}
-//write to utun
-int tun_write(int fd, uint8_t *buf, int len)
-{
-	u_int32_t type;
-	struct iovec iv[2];
-	struct ip *iph;
-
-	iph = (struct ip *) buf;
-
-	if(iph->ip_v == 6)
-		type = htonl(AF_INET6);
-	else
-		type = htonl(AF_INET);
-
-	iv[0].iov_base = (char *)&type;
-	iv[0].iov_len  = sizeof (type);
-	iv[1].iov_base = buf;
-	iv[1].iov_len  = len;
-
-	return header_modify_read_write_return(writev (fd, iv, 2));
-}
-
 #elif defined(NEW_TUN)
 #define MAX_MRU 2048
 struct tun_data {
