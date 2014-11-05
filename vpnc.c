@@ -1851,10 +1851,12 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *shared_key)
 			int i;
 			static const unsigned char c012[3] = { 0, 1, 2 };
 			unsigned char *skeyid_e;
+			int dh_shared_secret_len;
 			unsigned char *dh_shared_secret;
 
 			/* Determine the shared secret.  */
-			dh_shared_secret = xallocc(dh_getlen(s->ike.dh_grp));
+			dh_shared_secret_len = dh_getlen(s->ike.dh_grp);
+			dh_shared_secret = xallocc(dh_shared_secret_len);
 			dh_create_shared(s->ike.dh_grp, dh_shared_secret, ke->u.ke.data);
 			hex_dump("dh_shared_secret", dh_shared_secret, dh_getlen(s->ike.dh_grp), NULL);
 
@@ -1898,7 +1900,7 @@ static void do_phase1_am_packet2(struct sa_block *s, const char *shared_key)
 			gcry_md_close(hm);
 			hex_dump("skeyid_e", skeyid_e, s->ike.md_len, NULL);
 
-			memset(dh_shared_secret, 0, sizeof(dh_shared_secret));
+			memset(dh_shared_secret, 0, dh_shared_secret_len);
 			free(dh_shared_secret);
 
 			/* Determine the IKE encryption key.  */
