@@ -628,18 +628,27 @@ int tun_close(int fd, char *dev)
 
 
 #if defined(__APPLE__)
-static inline int header_modify_read_write_return (int len)
+//remove the IP version header from the result of bytes read or written.
+static inline ssize_t header_modify_read_write_return (ssize_t len)
 {
     if (len > 0)
-        return len > sizeof (u_int32_t) ? len - sizeof (u_int32_t) : 0;
+        return len > (ssize_t) sizeof(u_int32_t) ? len - sizeof(u_int32_t) : 0;
     else
         return len;
 }
 
 //read from utun
-int utun_read(int fd, uint8_t *buf, int len) {
+ssize_t utun_read(int fd, uint8_t *buf, int len) {
 	u_int32_t type;
 	struct iovec iv[2];
+	struct ip *iph;
+	
+	iph = (struct ip *) buf;
+
+	if(iph->ip_v == 6)
+		type = htonl(AF_INET6);
+	else
+		type = htonl(AF_INET);
 
 	iv[0].iov_base = (char *)&type;
 	iv[0].iov_len = sizeof (type);
@@ -649,7 +658,7 @@ int utun_read(int fd, uint8_t *buf, int len) {
 	return header_modify_read_write_return(readv(fd, iv, 2));
 }
 //write to utun
-int utun_write(int fd, uint8_t *buf, int len)
+ssize_t utun_write(int fd, uint8_t *buf, int len)
 {
 	u_int32_t type;
 	struct iovec iv[2];
@@ -667,7 +676,7 @@ int utun_write(int fd, uint8_t *buf, int len)
 	iv[1].iov_base = buf;
 	iv[1].iov_len  = len;
 
-	return header_modify_read_write_return(writev (fd, iv, 2));
+	return header_modify_read_write_return(writev(fd, iv, 2));
 }
 #endif
 
