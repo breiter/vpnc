@@ -52,6 +52,8 @@ uint16_t opt_udpencapport;
 
 static void log_to_stderr(int priority __attribute__((unused)), const char *format, ...)
 {
+	if(opt_debug < 2) return;
+
 	va_list ap;
 
 	fprintf(stderr, "vpnc: ");
