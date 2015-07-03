@@ -73,7 +73,9 @@ LIBS += -lnsl -lresolv -lsocket
 endif
 ifneq (,$(findstring Apple,$(shell $(CC) --version)))
 # enabled in FSF GCC, disabled by default in Apple GCC
-CFLAGS += -fstrict-aliasing -freorder-blocks -fsched-interblock
+# CFLAGS += -fstrict-aliasing -freorder-blocks -fsched-interblock
+# clang 6.1 warning: -freorder-blocks is not supported
+CFLAGS += -fstrict-aliasing -fsched-interblock
 endif
 
 all : $(BINS) vpnc.8
