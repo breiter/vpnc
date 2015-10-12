@@ -793,7 +793,7 @@ static void process_tun(struct sa_block *s)
 	} else {
 		pack = tun_read(s->tun_fd, start, size);
 	}
-#elif
+#else
 	pack = tun_read(s->tun_fd, start, size);
 #endif
 	hex_dump("Rx pkt", start, pack, NULL);
