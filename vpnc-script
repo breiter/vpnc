@@ -88,8 +88,15 @@ if [ ! -d "/var/run/vpnc" ]; then
 	[ -x /sbin/restorecon ] && /sbin/restorecon /var/run/vpnc
 fi
 
-# stupid SunOS: no blubber in /usr/local/bin ... (on stdout)
-IPROUTE="`which ip 2> /dev/null | grep '^/'`"
+# macOS shouldn't have Linux's iproute2 `ip` in the path and if it does
+# have `/usr/local/bin/ip` from https://github.com/brona/iproute2mac, the
+# functionality is not at parity with Linux and it doesn't work.
+if [ "$OS" = "Darwin" ]; then
+  IPROUTE=""
+else
+	# stupid SunOS: no blubber in /usr/local/bin ... (on stdout)
+	IPROUTE="`which ip 2> /dev/null | grep '^/'`"
+fi
 
 if ifconfig --help 2>&1 | grep BusyBox > /dev/null; then
 	ifconfig_syntax_inet=""
